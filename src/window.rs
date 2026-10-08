@@ -1176,8 +1176,9 @@ impl RepoWindow {
             }
         }
 
-        // Status bar: no background in any state (floating white text
-        // over blur), so opening a folder never shifts the chrome.
+        // Status bar: same 80/20 treatment as the sidebar in every state,
+        // so opening a folder never shifts the chrome.
+        let status_bg = theme.statusbar_bg;
         let status_fg = theme.statusbar_fg;
         let status_msg = self.status.clone();
         let cursor = self.cursor_pos;
@@ -1188,7 +1189,7 @@ impl RepoWindow {
         let nvim_status = nvim.status();
         egui::TopBottomPanel::bottom("status")
             .exact_height(STATUS_BAR_HEIGHT)
-            .frame(egui::Frame::default().fill(egui::Color32::TRANSPARENT).inner_margin(
+            .frame(egui::Frame::default().fill(status_bg).inner_margin(
                 egui::Margin {
                     left: 10,
                     right: 10,

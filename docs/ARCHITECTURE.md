@@ -25,7 +25,7 @@ views; there is no custom title bar (native OS chrome only).
 - `editor/nvim.rs` — spawns `nvim --embed --headless` via `nvim-rs` + tokio; `sync_buffer` / `read_buffer`. egui `TextEdit` is the surface in V1; grid rendering plugs in here.
 - `preview/image.rs` — `image` crate + `resvg`/`tiny-skia` for SVG, `thumbnail(2048)` cap, `ImageCache` textures, `fit_contain` shrink-to-fit preview sizing.
 - `safety.rs` — mtime+len snapshots, guarded write, overwrite dialog.
-- `theme.rs` — ArctisCode Black tokens from `public/styles/tokens.json` → `egui::Visuals`. The Explorer panel and status bar are fully transparent (opaque `card_bg` covers task columns and weak fills); the viewport is transparent with sharp see-through — no OS blur, since vibrancy blanks GL compositing on this stack (WGPU renderer would be the path back to frost).
+- `theme.rs` — ArctisCode Black tokens from `public/styles/tokens.json` → `egui::Visuals`. Explorer, activity bar and status bar are 80% opaque / 20% see-through (opaque `card_bg` covers task columns and weak fills); sharp transparency, no OS blur.
 - `icons.rs` — painter-drawn glyphs, frameless icon buttons, and the blue
   `primary_button` helper (global widget chrome stays neutral grey).
 - `v2_stub.rs` — `LspClient` / `AiProvider` / `TerminalSession` seams, no cost in V1.

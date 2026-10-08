@@ -53,6 +53,7 @@ pub struct VscodeTheme {
     pub widget_bg: Color32,
     pub widget_border: Color32,
     // Status bar
+    pub statusbar_bg: Color32,
     pub statusbar_fg: Color32,
     // Activity bar icons
     pub activity_fg: Color32,
@@ -72,13 +73,16 @@ impl Default for VscodeTheme {
         Self {
             editor_bg: Color32::from_rgb(0x00, 0x00, 0x00),
             editor_fg: Color32::from_rgb(0xD4, 0xD4, 0xD4),
-            // Sidebar paints are translucent: the transparent window shows
-            // the desktop behind them (sharp, no OS blur).
-            sidebar_bg: Color32::from_rgba_unmultiplied(0x10, 0x10, 0x10, 0),
+            // Sidebar paints are 80% opaque / 20% see-through: a whisper
+            // of the desktop behind them, black covering the rest.
+            // No OS blur.
+            sidebar_bg: Color32::from_rgba_unmultiplied(0x10, 0x10, 0x10, 204),
+            // Same 80/20 treatment as the sidebar: the two left strips
+            // blend into one transparent region.
+            activity_bg: Color32::from_rgba_unmultiplied(0x10, 0x10, 0x10, 204),
             // Opaque card surface for in-window cards (task columns, weak
             // fills) that must stay readable over any background.
             card_bg: Color32::from_rgb(0x10, 0x10, 0x10),
-            activity_bg: Color32::from_rgb(0x00, 0x00, 0x00),
             tabstrip_bg: Color32::from_rgb(0x10, 0x10, 0x10),
             tab_active_bg: Color32::from_rgb(0x00, 0x00, 0x00),
             tab_inactive_bg: Color32::from_rgb(0x16, 0x16, 0x16),
@@ -111,6 +115,7 @@ impl Default for VscodeTheme {
             widget_bg: Color32::from_rgb(0x10, 0x10, 0x10),
             widget_border: Color32::from_rgb(0x2A, 0x2A, 0x2A),
 
+            statusbar_bg: Color32::from_rgba_unmultiplied(0x10, 0x10, 0x10, 204),
             statusbar_fg: Color32::WHITE,
 
             activity_fg: Color32::WHITE,

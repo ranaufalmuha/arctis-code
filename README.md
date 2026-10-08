@@ -16,10 +16,10 @@ ArctisCode Black: pitch-black background, neutral dark-grey card surfaces,
 no blue-tinted chrome (the blue status bar stays). Widget chrome
 (scrollbars, secondary buttons) is neutral grey; only primary actions
 (Open, Save, Create…) use blue, via an explicit button helper. The window is transparent:
-the Explorer sidebar and the status bar have no background in any state
-(floating text, guide lines and floating status text over a sharp
-see-through; no row boxes — selection reads as white vs grey text),
-while editor, activity bar and dialogs stay solid. No OS blur: vibrancy
+the Explorer sidebar, the activity bar and the status bar are 80% black / 20% see-through
+in any state (sharp, no blur; no row boxes — selection reads as white
+vs grey text),
+while editor and dialogs stay solid. No OS blur: vibrancy
 blanks GL compositing on this stack, so transparency stays sharp.
 Tokens live in `public/styles/tokens.json`, mapped to egui in
 `src/theme.rs` (`src/icons.rs` holds the painter-drawn glyphs).
