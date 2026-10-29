@@ -4,8 +4,9 @@
 //! so the texture cache stays bounded.
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 pub const MAX_PREVIEW_DIM: u32 = 2048;
 
@@ -17,9 +18,7 @@ pub fn fit_contain(image: egui::Vec2, available: egui::Vec2) -> egui::Vec2 {
     if image.x <= 0.0 || image.y <= 0.0 || available.x <= 0.0 || available.y <= 0.0 {
         return egui::Vec2::ZERO;
     }
-    let ratio = (available.x / image.x)
-        .min(available.y / image.y)
-        .min(1.0);
+    let ratio = (available.x / image.x).min(available.y / image.y).min(1.0);
     if !ratio.is_finite() {
         return egui::Vec2::ZERO;
     }
@@ -54,8 +53,8 @@ fn into_rgba8_fast(img: image::DynamicImage) -> image::RgbaImage {
 fn load_raster(path: &Path) -> Result<egui::ColorImage> {
     // Header-only read first: skip the resample pass when the image
     // already fits the preview cap.
-    let (w0, h0) = image::image_dimensions(path)
-        .with_context(|| format!("probe {}", path.display()))?;
+    let (w0, h0) =
+        image::image_dimensions(path).with_context(|| format!("probe {}", path.display()))?;
     let img = image::open(path).with_context(|| format!("decode {}", path.display()))?;
     let img = if needs_downscale(w0, h0) {
         img.thumbnail(MAX_PREVIEW_DIM, MAX_PREVIEW_DIM)
@@ -91,34 +90,114 @@ fn load_svg(path: &Path, scale: f32) -> Result<egui::ColorImage> {
     ))
 }
 
-#[derive(Default)]
-pub struct ImageCache {
-    textures: HashMap<String, egui::TextureHandle>,
+/// Decode on any thread: picks raster vs SVG by extension.
+fn decode_image(path: &Path) -> Result<egui::ColorImage> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "svg" {
+        load_svg(path, 2.0)
+    } else {
+        load_raster(path)
+    }
 }
 
+pub struct ImageCache {
+    textures: HashMap<String, egui::TextureHandle>,
+    failed: HashMap<String, String>,
+    pending: HashSet<String>,
+    order: VecDeque<String>,
+    tx: Sender<(String, Result<egui::ColorImage, String>)>,
+    rx: Receiver<(String, Result<egui::ColorImage, String>)>,
+}
+
+impl Default for ImageCache {
+    fn default() -> Self {
+        let (tx, rx) = channel();
+        Self {
+            textures: HashMap::new(),
+            failed: HashMap::new(),
+            pending: HashSet::new(),
+            order: VecDeque::new(),
+            tx,
+            rx,
+        }
+    }
+}
+
+/// At most this many decoded previews stay resident; older ones are
+/// forgotten (GPU texture freed) on insert.
+pub const MAX_CACHED_IMAGES: usize = 8;
+
 impl ImageCache {
-    pub fn texture_for(&mut self, ctx: &egui::Context, path: &Path) -> Result<egui::TextureHandle> {
+    /// Non-blocking lookup: `Ok(Some)` ready, `Ok(None)` still decoding
+    /// (caller shows a spinner), `Err` decoded-and-failed.
+    pub fn texture_for(
+        &mut self,
+        ctx: &egui::Context,
+        path: &Path,
+    ) -> Result<Option<egui::TextureHandle>> {
+        self.pump(ctx);
         let key = path.display().to_string();
         if let Some(t) = self.textures.get(&key) {
-            return Ok(t.clone());
+            return Ok(Some(t.clone()));
         }
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let img = if ext == "svg" {
-            load_svg(path, 2.0)?
-        } else {
-            load_raster(path)?
-        };
-        let tex = ctx.load_texture(key.clone(), img, egui::TextureOptions::LINEAR);
-        self.textures.insert(key, tex.clone());
-        Ok(tex)
+        if let Some(e) = self.failed.get(&key) {
+            anyhow::bail!("{e}");
+        }
+        if !self.pending.contains(&key) {
+            self.pending.insert(key.clone());
+            let tx = self.tx.clone();
+            let ctx = ctx.clone();
+            let path = path.to_path_buf();
+            // shortcut: one short-lived thread per image; upgrade to a
+            // shared pool if gallery-style browsing ever spawns many.
+            std::thread::spawn(move || {
+                let out = decode_image(&path).map_err(|e| format!("{e:#}"));
+                let _ = tx.send((key, out));
+                ctx.request_repaint();
+            });
+        }
+        Ok(None)
+    }
+
+    /// Move finished background decodes onto GPU textures (UI thread only).
+    fn pump(&mut self, ctx: &egui::Context) {
+        while let Ok((key, out)) = self.rx.try_recv() {
+            self.pending.remove(&key);
+            match out {
+                Ok(img) => {
+                    let tex = ctx.load_texture(key.clone(), img, egui::TextureOptions::LINEAR);
+                    self.textures.insert(key.clone(), tex);
+                    self.order.push_back(key);
+                    // shortcut: plain FIFO at 8 entries, not a true LRU;
+                    // upgrade if multi-image workflows ever thrash.
+                    while self.order.len() > MAX_CACHED_IMAGES {
+                        if let Some(old) = self.order.pop_front() {
+                            if self.textures.remove(&old).is_some() {
+                                ctx.forget_image(&old);
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.failed.insert(key, e);
+                }
+            }
+        }
     }
 
     pub fn invalidate(&mut self, path: &Path) {
-        self.textures.remove(&path.display().to_string());
+        let key = path.display().to_string();
+        if self.textures.remove(&key).is_some() {
+            self.order.retain(|k| k != &key);
+        }
+        self.failed.remove(&key);
+        self.pending.remove(&key);
     }
 }
 
@@ -132,19 +211,13 @@ mod tests {
 
     #[test]
     fn large_landscape_shrinks_to_fit_width() {
-        let out = fit_contain(
-            egui::vec2(2000.0, 1000.0),
-            egui::vec2(800.0, 600.0),
-        );
+        let out = fit_contain(egui::vec2(2000.0, 1000.0), egui::vec2(800.0, 600.0));
         assert!(approx(out, egui::vec2(800.0, 400.0)));
     }
 
     #[test]
     fn large_portrait_shrinks_to_fit_height() {
-        let out = fit_contain(
-            egui::vec2(1000.0, 2000.0),
-            egui::vec2(800.0, 600.0),
-        );
+        let out = fit_contain(egui::vec2(1000.0, 2000.0), egui::vec2(800.0, 600.0));
         assert!(approx(out, egui::vec2(300.0, 600.0)));
     }
 
@@ -184,5 +257,20 @@ mod tests {
         let buf = image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 4]));
         let out = into_rgba8_fast(image::DynamicImage::ImageRgba8(buf));
         assert_eq!(out.get_pixel(0, 0), &image::Rgba([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn background_decode_path_reads_generated_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.png");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            4,
+            3,
+            image::Rgba([1, 2, 3, 255]),
+        ))
+        .save(&p)
+        .unwrap();
+        let out = decode_image(&p).unwrap();
+        assert_eq!(out.size, [4, 3]);
     }
 }

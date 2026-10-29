@@ -9,6 +9,8 @@ fn rejects_bad_names() {
     assert!(validate_name("a/b").is_err());
     assert!(validate_name("..").is_err());
     assert!(validate_name(".").is_err());
+    assert!(validate_name("a\0b").is_err());
+    assert!(validate_name("name.").is_err());
     assert_eq!(validate_name("  notes.md ").unwrap(), "notes.md");
 }
 

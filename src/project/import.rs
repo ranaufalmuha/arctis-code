@@ -59,9 +59,9 @@ fn is_within(child: &Path, parent: &Path) -> bool {
 }
 
 /// Pick a non-colliding destination inside `dir` for `file_name`.
-fn unique_dest(dir: &Path, file_name: &str) -> (PathBuf, bool) {
+fn unique_dest(dir: &Path, file_name: &str, reserved: &std::collections::HashSet<PathBuf>) -> (PathBuf, bool) {
     let candidate = dir.join(file_name);
-    if !candidate.exists() {
+    if std::fs::symlink_metadata(&candidate).is_err() && !reserved.contains(&candidate) {
         return (candidate, false);
     }
     let (stem, ext) = match file_name.rfind('.') {
@@ -74,7 +74,7 @@ fn unique_dest(dir: &Path, file_name: &str) -> (PathBuf, bool) {
             None => format!("{stem} ({n})"),
         };
         let candidate = dir.join(&alt);
-        if !candidate.exists() {
+        if std::fs::symlink_metadata(&candidate).is_err() && !reserved.contains(&candidate) {
             return (candidate, true);
         }
     }
@@ -118,7 +118,16 @@ pub fn copy_into(
     dest_dir: &Path,
     project_root: &Path,
 ) -> anyhow::Result<Vec<CopyOutcome>> {
-    let planned = plan_operations(sources, dest_dir, project_root, "copy")?;
+    copy_into_impl(sources, dest_dir, project_root, false)
+}
+
+/// Copy Explorer selections, allowing a duplicate beside the source.
+pub fn copy_explorer_items(sources: &[PathBuf], dest_dir: &Path, project_root: &Path) -> anyhow::Result<Vec<CopyOutcome>> {
+    copy_into_impl(sources, dest_dir, project_root, true)
+}
+
+fn copy_into_impl(sources: &[PathBuf], dest_dir: &Path, project_root: &Path, allow_same_folder: bool) -> anyhow::Result<Vec<CopyOutcome>> {
+    let planned = plan_operations(sources, dest_dir, project_root, "copy", allow_same_folder)?;
     let mut outcomes = Vec::with_capacity(planned.len());
     for item in planned {
         match item {
@@ -155,7 +164,7 @@ pub fn move_into(
     dest_dir: &Path,
     project_root: &Path,
 ) -> anyhow::Result<Vec<CopyOutcome>> {
-    let planned = plan_operations(sources, dest_dir, project_root, "move")?;
+    let planned = plan_operations(sources, dest_dir, project_root, "move", false)?;
     let mut outcomes = Vec::with_capacity(planned.len());
     for item in planned {
         match item {
@@ -219,6 +228,7 @@ fn plan_operations(
     dest_dir: &Path,
     project_root: &Path,
     verb: &str,
+    allow_same_folder: bool,
 ) -> anyhow::Result<Vec<Planned>> {
     if !dest_dir.is_dir() {
         anyhow::bail!("drop target is not a folder: {}", dest_dir.display());
@@ -234,6 +244,7 @@ fn plan_operations(
     }
 
     let mut planned = Vec::with_capacity(sources.len());
+    let mut reserved = std::collections::HashSet::new();
     for src in sources {
         // symlink_metadata covers files, dirs, and (dangling) symlinks.
         if std::fs::symlink_metadata(src).is_err() {
@@ -260,7 +271,7 @@ fn plan_operations(
             .parent()
             .and_then(|p| p.canonicalize().ok())
             .or_else(|| src.parent().map(|p| p.to_path_buf()));
-        if parent_canon.map(|p| p == dest_canon).unwrap_or(false) {
+        if !allow_same_folder && parent_canon.map(|p| p == dest_canon).unwrap_or(false) {
             planned.push(Planned::Done(CopyOutcome::skipped(
                 src.clone(),
                 "already in this folder".to_owned(),
@@ -278,7 +289,8 @@ fn plan_operations(
                 continue;
             }
         };
-        let (target, renamed) = unique_dest(dest_dir, &file_name);
+        let (target, renamed) = unique_dest(dest_dir, &file_name, &reserved);
+        reserved.insert(target.clone());
         planned.push(Planned::Do(PlannedOp {
             src: src.clone(),
             src_canon,

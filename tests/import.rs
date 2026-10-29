@@ -185,3 +185,24 @@ fn move_rejects_folder_into_itself() {
     assert!(out[0].skipped);
     assert!(root.join("sub").exists(), "nothing must have moved");
 }
+
+#[test]
+fn explorer_copy_preserves_files_with_matching_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let a = root.join("a");
+    let b = root.join("b");
+    let dest = root.join("dest");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    std::fs::create_dir(&dest).unwrap();
+    std::fs::write(a.join("same.txt"), "first").unwrap();
+    std::fs::write(b.join("same.txt"), "second").unwrap();
+    let result = arctis_code::project::import::copy_explorer_items(&[a.join("same.txt"), b.join("same.txt")], &dest, root).unwrap();
+    assert!(result.iter().all(|entry| entry.succeeded()));
+    assert_eq!(std::fs::read_to_string(dest.join("same.txt")).unwrap(), "first");
+    assert_eq!(std::fs::read_to_string(dest.join("same (2).txt")).unwrap(), "second");
+    let copy = arctis_code::project::import::copy_explorer_items(&[a.join("same.txt")], &a, root).unwrap();
+    assert!(copy[0].succeeded());
+    assert_eq!(std::fs::read_to_string(a.join("same (2).txt")).unwrap(), "first");
+}

@@ -22,6 +22,12 @@ pub fn validate_name(name: &str) -> Result<String, String> {
     if trimmed.contains('/') {
         return Err("Nested paths aren't supported yet — pick a plain name.".to_owned());
     }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err("That name contains a control character.".to_owned());
+    }
+    if trimmed.ends_with('.') {
+        return Err("Names can't end with a dot.".to_owned());
+    }
     if trimmed == "." || trimmed == ".." {
         return Err("That name isn't allowed.".to_owned());
     }

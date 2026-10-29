@@ -1,8 +1,8 @@
 //! VSCode-style editor tab strip, custom-drawn on the painter.
 //!
-//! - 35px strip on the tab-group background (`#252526`)
+//! - 35px strip on the tab-group background (`tabstrip_bg`)
 //! - active tab takes the editor background with white text
-//! - inactive tabs are `#2D2D2D` with muted text
+//! - inactive tabs are `tab_inactive_bg` with muted text
 //! - close `×` always visible on the active tab, on hover otherwise
 //! - dirty tabs show a dot instead of `×` until hovered
 
@@ -47,11 +47,13 @@ pub fn show_row(
         // default "child" Ui id, so default-salted scroll areas
         // would collide ("Double use of ScrollArea ID").
         .id_salt("tab-strip")
+        .max_width(ui.available_width())
+        .max_height(TAB_STRIP_HEIGHT)
         // Fill the strip width, but shrink vertically to the 35px
         // tabs — [false, false] here would swallow the whole
         // central panel height and leave the editor with nothing.
         .auto_shrink([false, true])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
@@ -59,13 +61,10 @@ pub fn show_row(
                 let mut close_idx: Option<usize> = None;
 
                 for (idx, tab) in manager.tabs.iter().enumerate() {
-                    if let Some(action) = show_tab(
-                        ui,
-                        theme,
-                        tab.title(),
-                        tab.dirty,
-                        Some(idx) == manager.active,
-                    ) {
+                    let title = tab.title();
+                    if let Some(action) =
+                        show_tab(ui, theme, &title, tab.dirty, Some(idx) == manager.active)
+                    {
                         match action {
                             TabAction::Switch => switch_to = Some(idx),
                             TabAction::Close => {
@@ -96,7 +95,7 @@ enum TabAction {
 fn show_tab(
     ui: &mut egui::Ui,
     theme: &VscodeTheme,
-    title: String,
+    title: &str,
     dirty: bool,
     active: bool,
 ) -> Option<TabAction> {
@@ -105,7 +104,7 @@ fn show_tab(
 
     let font_id = egui::TextStyle::Body.resolve(ui.style());
     let text_w = ui
-        .fonts(|f| f.layout_no_wrap(title.clone(), font_id.clone(), theme.text))
+        .fonts(|f| f.layout_no_wrap(title.to_owned(), font_id.clone(), theme.text))
         .size()
         .x;
     let tab_w = (PAD_LEFT + text_w + CLOSE_BOX + 4.0).clamp(72.0, 220.0);
@@ -152,8 +151,7 @@ fn show_tab(
         egui::vec2(CLOSE_BOX - 4.0, 18.0),
     );
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    let close_hovered =
-        hovered && pointer.map(|pos| close_rect.contains(pos)).unwrap_or(false);
+    let close_hovered = hovered && pointer.map(|pos| close_rect.contains(pos)).unwrap_or(false);
 
     if dirty && !close_hovered {
         // Modified dot (VSCode `tab.activeModifiedBorder`).
@@ -162,14 +160,12 @@ fn show_tab(
         } else {
             theme.dirty_dot.gamma_multiply(0.55)
         };
-        ui.painter().circle_filled(close_rect.center(), 4.0, dot_color);
+        ui.painter()
+            .circle_filled(close_rect.center(), 4.0, dot_color);
     } else if active || hovered {
         if close_hovered {
-            ui.painter().rect_filled(
-                close_rect,
-                3.0,
-                theme.list_hover.gamma_multiply(1.6),
-            );
+            ui.painter()
+                .rect_filled(close_rect, 3.0, theme.list_hover.gamma_multiply(1.6));
         }
         ui.painter().text(
             close_rect.center(),

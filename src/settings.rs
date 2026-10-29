@@ -13,6 +13,16 @@ pub struct Settings {
     /// Off = closing unsaved work auto-saves instead of asking (never
     /// discards silently).
     pub confirm_guards: bool,
+    /// Run the external formatter (rustfmt/prettier/gofmt) on save.
+    /// Defaults to true for settings files written before this flag existed.
+    #[serde(default = "default_true")]
+    pub format_on_save: bool,
+    /// Type `(` and get `()`; Enter keeps indentation (and splits `{}`).
+    #[serde(default = "default_true")]
+    pub auto_close_brackets: bool,
+    /// Enter copies the line indent (+1 level after `{`/`[`/`(`/`:`).
+    #[serde(default = "default_true")]
+    pub smart_enter: bool,
 }
 
 impl Default for Settings {
@@ -21,8 +31,15 @@ impl Default for Settings {
             editor_font_size: 14.0,
             ui_font_size: 13.0,
             confirm_guards: true,
+            format_on_save: true,
+            auto_close_brackets: true,
+            smart_enter: true,
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Settings {
@@ -92,108 +109,41 @@ pub fn show_settings(
     tasks_path: &Path,
 ) -> bool {
     let mut mutated = false;
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.add_space(20.0);
-        ui.label(
-            egui::RichText::new("SETTINGS")
-                .size(11.0)
-                .color(theme.muted),
-        );
-    });
-    ui.add_space(4.0);
-
     egui::ScrollArea::vertical()
         .id_salt("settings-page")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(20.0);
+            egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)).show(ui, |ui| {
+                ui.set_max_width(680.0);
                 ui.vertical(|ui| {
-                    ui.set_min_size(egui::vec2(420.0, 0.0));
+                    ui.label(egui::RichText::new("Settings").size(20.0).strong().color(theme.text));
+                    ui.label(egui::RichText::new("Customize your editor and workspace.").size(12.0).color(theme.muted));
+                    ui.add_space(20.0);
 
-                    ui.heading("Appearance");
-                    ui.horizontal(|ui| {
-                        ui.label("Editor font size");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut settings.editor_font_size)
-                                    .range(10.0..=24.0)
-                                    .speed(0.2),
-                            )
-                            .changed()
-                        {
-                            mutated = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Interface font size");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut settings.ui_font_size)
-                                    .range(10.0..=20.0)
-                                    .speed(0.2),
-                            )
-                            .changed()
-                        {
-                            mutated = true;
-                        }
-                    });
-                    ui.add_space(12.0);
+                    settings_section(ui, theme, "Appearance");
+                    setting_number(ui, theme, "Editor font size", "Size of text in the editor.", &mut settings.editor_font_size, 10.0..=24.0, &mut mutated);
+                    setting_number(ui, theme, "Interface font size", "Size of text in the interface.", &mut settings.ui_font_size, 10.0..=20.0, &mut mutated);
 
-                    ui.heading("Behavior");
-                    if ui
-                        .checkbox(
-                            &mut settings.confirm_guards,
-                            "Confirm before closing unsaved work",
-                        )
-                        .changed()
-                    {
-                        mutated = true;
+                    ui.add_space(18.0);
+                    settings_section(ui, theme, "Behavior");
+                    setting_toggle(ui, theme, "Confirm before closing unsaved work", "When disabled, unsaved work is saved automatically.", &mut settings.confirm_guards, &mut mutated);
+                    setting_toggle(ui, theme, "Format on save", "Format supported files when saving.", &mut settings.format_on_save, &mut mutated);
+                    setting_toggle(ui, theme, "Auto-close brackets", "Automatically insert closing brackets.", &mut settings.auto_close_brackets, &mut mutated);
+                    setting_toggle(ui, theme, "Smart Enter", "Keep indentation and indent after opening brackets.", &mut settings.smart_enter, &mut mutated);
+
+                    ui.add_space(18.0);
+                    settings_section(ui, theme, "Workspace");
+                    info_row(ui, theme, "Folder", &root.map(|r| r.display().to_string()).unwrap_or_else(|| "No folder open".to_owned()));
+                    info_row(ui, theme, "Tasks file", &tasks_path.display().to_string());
+
+                    ui.add_space(18.0);
+                    settings_section(ui, theme, "Shortcuts");
+                    for (keys, what) in [("⌘O", "Open folder"), ("⌘S", "Save"), ("⌘W", "Close tab"), ("⌘B", "Toggle sidebar"), ("⇧⌘N", "New window")] {
+                        info_row(ui, theme, what, keys);
                     }
-                    ui.label(
-                        egui::RichText::new(
-                            "Off: closing saves automatically — never discards silently.",
-                        )
-                        .size(12.0)
-                        .color(theme.muted),
-                    );
-                    ui.add_space(12.0);
-
-                    ui.heading("Workspace");
-                    ui.label(format!(
-                        "Folder: {}",
-                        root.map(|r| r.display().to_string())
-                            .unwrap_or_else(|| "none open".to_owned())
-                    ));
-                    ui.label(format!("Tasks file: {}", tasks_path.display()));
-                    ui.add_space(12.0);
-
-                    ui.heading("Shortcuts");
-                    for (keys, what) in [
-                        ("⌘O", "Open folder"),
-                        ("⌘S", "Save"),
-                        ("⌘W", "Close tab"),
-                        ("⌘B", "Toggle sidebar"),
-                        ("⇧⌘N", "New window"),
-                    ] {
-                        ui.label(
-                            egui::RichText::new(format!("{keys}  {what}"))
-                                .size(12.0)
-                                .color(theme.muted),
-                        );
-                    }
-                    ui.add_space(12.0);
-
-                    ui.heading("About");
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "ArctisCode {} — native Rust editor (egui + Neovim).",
-                            env!("CARGO_PKG_VERSION")
-                        ))
-                        .size(12.0)
-                        .color(theme.muted),
-                    );
+                    ui.add_space(18.0);
+                    settings_section(ui, theme, "About");
+                    info_row(ui, theme, "ArctisCode", &format!("Version {}", env!("CARGO_PKG_VERSION")));
                 });
             });
         });
@@ -203,6 +153,37 @@ pub fn show_settings(
         settings.ui_font_size = settings.ui_font_size.clamp(10.0, 20.0);
     }
     mutated
+}
+
+fn settings_section(ui: &mut egui::Ui, theme: &crate::theme::VscodeTheme, title: &str) {
+    ui.label(egui::RichText::new(title).size(14.0).strong().color(theme.text));
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(4.0);
+}
+
+fn setting_number(ui: &mut egui::Ui, theme: &crate::theme::VscodeTheme, title: &str, description: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, changed: &mut bool) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(title).strong().color(theme.text));
+    ui.label(egui::RichText::new(description).size(12.0).color(theme.muted));
+    *changed |= ui.add(egui::DragValue::new(value).range(range).speed(0.2).suffix(" px")).changed();
+    ui.add_space(6.0);
+}
+
+fn setting_toggle(ui: &mut egui::Ui, theme: &crate::theme::VscodeTheme, title: &str, description: &str, value: &mut bool, changed: &mut bool) {
+    ui.add_space(6.0);
+    *changed |= ui.checkbox(value, egui::RichText::new(title).strong().color(theme.text)).changed();
+    ui.indent(("setting-description", title), |ui| {
+        ui.label(egui::RichText::new(description).size(12.0).color(theme.muted));
+    });
+    ui.add_space(6.0);
+}
+
+fn info_row(ui: &mut egui::Ui, theme: &crate::theme::VscodeTheme, title: &str, value: &str) {
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(title).color(theme.text));
+    ui.label(egui::RichText::new(value).size(12.0).color(theme.muted));
+    ui.add_space(4.0);
 }
 
 #[cfg(test)]
@@ -223,8 +204,14 @@ mod tests {
             editor_font_size: 16.0,
             ui_font_size: 12.0,
             confirm_guards: false,
+            format_on_save: false,
+            auto_close_brackets: false,
+            smart_enter: false,
         };
-        let text = serde_json::to_string(&SettingsDoc { settings: s.clone() }).unwrap();
+        let text = serde_json::to_string(&SettingsDoc {
+            settings: s.clone(),
+        })
+        .unwrap();
         let (back, warning) = parse_settings(Some(&text));
         assert!(warning.is_none());
         assert_eq!(back, s);
@@ -239,7 +226,9 @@ mod tests {
 
     #[test]
     fn out_of_range_values_clamp() {
-        let (s, _) = parse_settings(Some(r#"{"settings":{"editor_font_size":99.0,"ui_font_size":1.0,"confirm_guards":true}}"#));
+        let (s, _) = parse_settings(Some(
+            r#"{"settings":{"editor_font_size":99.0,"ui_font_size":1.0,"confirm_guards":true}}"#,
+        ));
         assert_eq!(s.editor_font_size, 24.0);
         assert_eq!(s.ui_font_size, 10.0);
     }

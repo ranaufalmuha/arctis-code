@@ -73,7 +73,10 @@ impl NeovimBackend {
             };
         }
 
+        // Single worker: fire-and-forget syncs need a live driver, but
+        // one thread is enough (default would spawn one per core).
         let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_all()
             .build()
             .ok();
@@ -138,6 +141,11 @@ impl NeovimBackend {
     ///
     /// Fire-and-forget: returns immediately, never blocks the UI thread.
     pub fn sync_buffer(&self, path: &Path, content: &str) {
+        // shortcut: live-sync capped at 512KB; larger files sync on save only,
+        // upgrade to chunked set_lines if big-file editing ever needs nvim live.
+        if content.len() > 512 * 1024 {
+            return;
+        }
         let Some(nvim) = self.nvim.clone() else {
             return;
         };

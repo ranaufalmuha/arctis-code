@@ -27,3 +27,18 @@ pub trait TerminalSession: Send {
         anyhow::bail!("terminal not available in V1 — use Ghostty")
     }
 }
+
+/// Future extension point: completion providers live OUTSIDE core.
+///
+/// Core ships no suggestions by design (not even word-based): completion
+/// is an extension (`arctis-extension-*`), loaded only when the user
+/// installs it, so the base editor never pays for it. The extension host
+/// will call [`CompletionProvider::complete`] with the buffer + cursor and
+/// render the returned items in its own UI.
+pub trait CompletionProvider: Send {
+    /// Byte-offset cursor, current line prefix: return (replacement, label)
+    /// pairs, best first. Must return quickly (<50ms) or not at all.
+    fn complete(&mut self, _file: &PathBuf, _prefix: &str) -> Vec<(String, String)> {
+        Vec::new()
+    }
+}

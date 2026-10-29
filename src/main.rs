@@ -4,8 +4,10 @@ fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let initial_path = args.get(1).map(|s| s.to_owned());
 
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some(icon) = arctis_code::app_icon::icon() { viewport = viewport.with_icon(icon); }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([800.0, 500.0])
             .with_title("ArctisCode")
@@ -27,8 +29,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "ArctisCode",
         options,
-        Box::new(move |cc| {
-            Ok(Box::new(ArctisCodeApp::new(cc, initial_path)))
-        }),
+        Box::new(move |cc| Ok(Box::new(ArctisCodeApp::new(cc, initial_path)))),
     )
 }

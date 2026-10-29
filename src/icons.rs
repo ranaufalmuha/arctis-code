@@ -90,7 +90,10 @@ pub fn draw_glyph(
             for i in 0..8 {
                 let a = i as f32 * std::f32::consts::FRAC_PI_4;
                 let (s, c) = a.sin_cos();
-                seg((8.0 + c * 4.5, 8.0 + s * 4.5), (8.0 + c * 6.5, 8.0 + s * 6.5));
+                seg(
+                    (8.0 + c * 4.5, 8.0 + s * 4.5),
+                    (8.0 + c * 6.5, 8.0 + s * 6.5),
+                );
             }
         }
         Glyph::Kanban => {
@@ -182,11 +185,7 @@ pub fn icon_button(
 /// Primary action button (VSCode blue idle + lighter blue hover).
 /// Global widget chrome is neutral grey (scrollbars, secondary buttons),
 // so primaries opt back into blue with a scoped style override.
-pub fn primary_button(
-    ui: &mut egui::Ui,
-    theme: &VscodeTheme,
-    label: &str,
-) -> egui::Response {
+pub fn primary_button(ui: &mut egui::Ui, theme: &VscodeTheme, label: &str) -> egui::Response {
     ui.scope(|ui| {
         let visuals = ui.visuals_mut();
         visuals.widgets.inactive.bg_fill = theme.button_bg;
@@ -365,7 +364,10 @@ pub fn file_icon_for(path: &std::path::Path) -> FileIconKind {
     if ext.eq_ignore_ascii_case("jsx") {
         return F::Jsx;
     }
-    if ext.eq_ignore_ascii_case("ts") || ext.eq_ignore_ascii_case("mts") || ext.eq_ignore_ascii_case("cts") {
+    if ext.eq_ignore_ascii_case("ts")
+        || ext.eq_ignore_ascii_case("mts")
+        || ext.eq_ignore_ascii_case("cts")
+    {
         return F::Ts;
     }
     if ext.eq_ignore_ascii_case("tsx") {

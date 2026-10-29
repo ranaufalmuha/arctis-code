@@ -68,11 +68,5 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native(
-        "ArctisCode (hot)",
-        options,
-        Box::new(move |cc| {
-            load_app(cc)
-        }),
-    )
+    eframe::run_native("ArctisCode (hot)", options, Box::new(load_app))
 }

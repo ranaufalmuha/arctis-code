@@ -1,4 +1,6 @@
 pub mod app;
+pub mod app_icon;
+pub mod recent;
 pub mod editor;
 pub mod explorer;
 pub mod icons;

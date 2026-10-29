@@ -37,17 +37,28 @@ impl ProjectWatcher {
         watcher.watch(root, RecursiveMode::Recursive)?;
 
         // Bridge notify events into FsEvent channel on a background thread
-        // with a tiny debounce so saves don't spam the UI.
+        // with a trailing-edge debounce: rapid saves coalesce, but the
+        // last one always lands (leading-edge `continue` could drop it).
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let mut last = std::time::Instant::now();
-            for evt in rx_raw {
-                if last.elapsed() < Duration::from_millis(150) {
-                    continue;
+            let mut pending: Option<PathBuf> = None;
+            loop {
+                match rx_raw.recv_timeout(Duration::from_millis(150)) {
+                    Ok(evt) => {
+                        pending = Some(evt.paths.first().cloned().unwrap_or_default());
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if let Some(p) = pending.take() {
+                            let _ = tx.send(FsEvent::Changed(p));
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        if let Some(p) = pending.take() {
+                            let _ = tx.send(FsEvent::Changed(p));
+                        }
+                        break;
+                    }
                 }
-                last = std::time::Instant::now();
-                let path = evt.paths.first().cloned().unwrap_or_default();
-                let _ = tx.send(FsEvent::Changed(path));
             }
         });
 

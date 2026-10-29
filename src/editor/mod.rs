@@ -1,4 +1,9 @@
+pub mod autoedit;
+pub mod format;
+pub mod highlight;
 pub mod nvim;
+
+pub use highlight::{HlCache, Span};
 
 pub use nvim::{NeovimBackend, NvimStatus};
 

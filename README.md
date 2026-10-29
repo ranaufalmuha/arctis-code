@@ -4,7 +4,7 @@ Lightweight native Rust code editor — `egui` + embedded Neovim. No Electron / 
 
 ## Layout
 
-- `src/` — all Rust code (`main.rs`, `app.rs`, `window.rs`, `theme.rs`, `tasks.rs`, `settings.rs`, `project/`, `explorer/`, `tabs/`, `editor/`, `preview/`, `safety.rs`)
+- `src/` — all Rust code (`main.rs`, `app.rs`, `window/` split by view/io/chrome, `theme.rs`, `tasks.rs`, `settings.rs`, `project/`, `explorer/`, `tabs/`, `editor/`, `preview/`, `safety.rs`)
 - `public/` — static assets only (`icons/`, `fonts/`, `styles/tokens.json`)
 - `tests/` — V1 Definition-of-Done checks
 - `docs/` — architecture + perf notes
@@ -27,10 +27,12 @@ Tokens live in `public/styles/tokens.json`, mapped to egui in
 ## Views (activity bar)
 
 - **Explorer** — file tree + editor group (tabs, editor, image preview).
-- **Tasks** — Trello-style board (To Do / Doing / Done) per workspace,
+- **Tasks** — Trello-style board (Plan / In Progress / Done) per workspace,
   stored in `<workspace>/.arctis.json` (plain JSON, auto-saved on every
-  change; global `~/.arctis.json` fallback with no folder open). Cards:
-  add/rename/describe/delete, move with `‹ › ↑ ↓`.
+  change; global `~/.arctis.json` fallback with no folder open). Cards
+  show title, description preview, and priority chip — drag the whole
+  card between rails and positions; click a card to edit it in a modal
+  (title, description, priority, delete).
 - **Settings** — editor + interface font sizes (live), confirm-before-close
   toggle (off auto-saves instead of asking), workspace paths, shortcuts,
   about. Stored in global `~/.arctis.json`.
@@ -77,3 +79,17 @@ See `docs/HOTRELOAD.md`. Release `ArctisCode` stays statically linked.
 ## Perf budgets (PRD V1 §7)
 
 Track: startup, project-open, idle RSS, med-repo RSS, idle CPU, file-open latency. See `docs/PERF.md`.
+
+## macOS release bundle
+
+On macOS, run `scripts/build-macos.sh` to build `target/release/ArctisCode.app`.
+The script renders `public/icons/logo.svg` into the bundle icon and signs the
+bundle ad hoc for local use. Public distribution requires an Apple Developer ID
+signature and notarization; the script does not perform either step. The build
+matches the architecture of the machine running it. Neovim remains an optional
+external executable and must be available to the app on PATH.
+
+The Dock menu lists up to ten recent project folders. Selecting one opens a new
+window. History is stored locally in the OS application data directory under
+`ArctisCode/recent-projects.json`; missing folders are reported without removing
+or replacing the current workspace.

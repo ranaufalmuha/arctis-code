@@ -9,7 +9,12 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 #[allow(dead_code)]
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".venv", "dist", "build"];
+pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".venv", "dist", "build"];
+
+/// True for heavy dirs that filter-search skips (tree still shows them).
+pub fn is_skipped_dir(name: &str) -> bool {
+    SKIP_DIRS.iter().any(|s| s.eq_ignore_ascii_case(name))
+}
 
 #[derive(Debug, Clone)]
 pub struct FileNode {
@@ -81,13 +86,17 @@ impl FileTree {
     }
 
     pub fn children_of(&mut self, dir: &Path, depth: usize) -> Vec<FileNode> {
-        if let Some(cached) = self.cache.get(dir) {
-            return cached.clone();
+        self.children_ref(dir, depth).to_vec()
+    }
+
+    /// Borrowed children; callers that recurse must copy out the paths
+    /// they need first (the borrow ends before the recursive call).
+    pub fn children_ref(&mut self, dir: &Path, depth: usize) -> &[FileNode] {
+        if !self.cache.contains_key(dir) {
+            let kids = Self::list_dir(dir, depth);
+            self.cache.insert(dir.to_path_buf(), kids);
         }
-        let kids = Self::list_dir(dir, depth);
-        // Listed but collapsed by default; children load on expand.
-        self.cache.insert(dir.to_path_buf(), kids.clone());
-        kids
+        self.cache.get(dir).map(Vec::as_slice).unwrap_or(&[])
     }
 
     pub fn toggle(&mut self, dir: &Path) {
@@ -100,5 +109,18 @@ impl FileTree {
 
     pub fn is_expanded(&self, dir: &Path) -> bool {
         self.expanded.contains(dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heavy_dirs_skip_filter_search() {
+        assert!(is_skipped_dir(".git"));
+        assert!(is_skipped_dir("node_modules"));
+        assert!(is_skipped_dir("target"));
+        assert!(!is_skipped_dir("src"));
     }
 }

@@ -19,10 +19,16 @@ pub struct ArctisCodeApp {
     settings: Settings,
     windows: Vec<RepoWindow>,
     next_viewport: u64,
+    applied_mono: f32,
+    applied_ui: f32,
+    recent: Vec<std::path::PathBuf>,
+    observed_roots: std::collections::HashMap<egui::ViewportId, std::path::PathBuf>,
+    dock_initialized: bool,
 }
 
 impl ArctisCodeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial_path: Option<String>) -> Self {
+        crate::recent::install_context(&cc.egui_ctx);
         let theme = VscodeTheme::default();
         theme.apply(&cc.egui_ctx);
 
@@ -41,6 +47,11 @@ impl ArctisCodeApp {
                 initial_path,
             )],
             next_viewport: 1,
+            applied_mono: 0.0,
+            applied_ui: 0.0,
+            recent: crate::recent::load(),
+            observed_roots: Default::default(),
+            dock_initialized: false,
         }
     }
 }
@@ -54,12 +65,36 @@ impl eframe::App for ArctisCodeApp {
             settings,
             windows,
             next_viewport,
+            applied_mono,
+            applied_ui,
+            recent,
+            observed_roots,
+            dock_initialized,
         } = self;
 
-        // Settings drive the type scale; theme.apply below picks it up.
-        theme.mono_size = settings.editor_font_size;
-        theme.ui_size = settings.ui_font_size;
+        // Settings drive the type scale; re-apply only when sizes changed
+        // (apply() rebuilds fonts, so every-frame calls waste CPU).
+        if settings.editor_font_size != *applied_mono || settings.ui_font_size != *applied_ui {
+            theme.mono_size = settings.editor_font_size;
+            theme.ui_size = settings.ui_font_size;
+            theme.apply(ctx);
+            *applied_mono = settings.editor_font_size;
+            *applied_ui = settings.ui_font_size;
+        }
 
+        if !*dock_initialized {
+            crate::recent::update(recent);
+            *dock_initialized = true;
+        }
+        if let Some(path) = crate::recent::take() {
+            if path.is_dir() {
+                let id = fresh_viewport_id(*next_viewport);
+                *next_viewport += 1;
+                windows.push(RepoWindow::with_initial(id, Some(path.to_string_lossy().into_owned())));
+            } else if let Some(first) = windows.first_mut() {
+                first.status = format!("Project not found: {}", path.display());
+            }
+        }
         let mut actions: Vec<WindowAction> = Vec::new();
 
         // Root viewport always shows the first window.
@@ -75,6 +110,7 @@ impl eframe::App for ArctisCodeApp {
             let more: Vec<WindowAction> = ctx.show_viewport_immediate(
                 id,
                 egui::ViewportBuilder::default()
+                    .with_icon(crate::app_icon::icon().unwrap_or_default())
                     .with_inner_size([1280.0, 800.0])
                     .with_min_inner_size([800.0, 500.0])
                     .with_title(title)
@@ -88,6 +124,21 @@ impl eframe::App for ArctisCodeApp {
             );
             actions.extend(more);
             idx += 1;
+        }
+
+        let mut changed = false;
+        for window in windows.iter() {
+            if let Some(root) = &window.project.root {
+                if observed_roots.get(&window.viewport) != Some(root) {
+                    observed_roots.insert(window.viewport, root.clone());
+                    changed |= crate::recent::record(recent, root);
+                }
+            } else { observed_roots.remove(&window.viewport); }
+        }
+        observed_roots.retain(|id, _| windows.iter().any(|w| w.viewport == *id));
+        if changed {
+            if let Err(e) = crate::recent::save(recent) { eprintln!("ArctisCode: recent projects: {e:#}"); }
+            crate::recent::update(recent);
         }
 
         // Apply shell-level requests.
@@ -109,8 +160,5 @@ impl eframe::App for ArctisCodeApp {
                 }
             }
         }
-
-        // Keep theme applied (cheap; ensures reload consistency)
-        theme.apply(ctx);
     }
 }
