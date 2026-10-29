@@ -22,49 +22,7 @@ pub fn show(
         .outer_margin(egui::Margin::same(0))
         .show(ui, |ui| {
             ui.set_min_size(egui::vec2(ui.available_width(), TAB_STRIP_HEIGHT));
-            egui::ScrollArea::horizontal()
-                // Explicit salt: sibling Frame/scope children share the
-                // default "child" Ui id, so default-salted scroll areas
-                // would collide ("Double use of ScrollArea ID").
-                .id_salt("tab-strip")
-                // Fill the strip width, but shrink vertically to the 35px
-                // tabs — [false, false] here would swallow the whole
-                // central panel height and leave the editor with nothing.
-                .auto_shrink([false, true])
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                        let mut switch_to: Option<usize> = None;
-                        let mut close_idx: Option<usize> = None;
-
-                        for (idx, tab) in manager.tabs.iter().enumerate() {
-                            if let Some(action) = show_tab(
-                                ui,
-                                theme,
-                                tab.title(),
-                                tab.dirty,
-                                Some(idx) == manager.active,
-                            ) {
-                                match action {
-                                    TabAction::Switch => switch_to = Some(idx),
-                                    TabAction::Close => {
-                                        if close_request(idx) {
-                                            close_idx = Some(idx);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if let Some(i) = switch_to {
-                            manager.active = Some(i);
-                        }
-                        if let Some(i) = close_idx {
-                            manager.close(i);
-                        }
-                    });
-                });
+            show_row(ui, theme, manager, &mut close_request);
         });
 
     // Hairline between the strip and the editor below.
@@ -73,6 +31,60 @@ pub fn show(
         strip.response.rect.bottom(),
         egui::Stroke::new(1.0, theme.editor_bg),
     );
+}
+
+/// Tab row without its own outer frame: for embedding inside the custom
+/// titlebar (`TopBottomPanel::top`), which already paints the strip
+/// background. Takes the remaining horizontal width.
+pub fn show_row(
+    ui: &mut egui::Ui,
+    theme: &VscodeTheme,
+    manager: &mut TabManager,
+    close_request: &mut impl FnMut(usize) -> bool,
+) {
+    egui::ScrollArea::horizontal()
+        // Explicit salt: sibling Frame/scope children share the
+        // default "child" Ui id, so default-salted scroll areas
+        // would collide ("Double use of ScrollArea ID").
+        .id_salt("tab-strip")
+        // Fill the strip width, but shrink vertically to the 35px
+        // tabs — [false, false] here would swallow the whole
+        // central panel height and leave the editor with nothing.
+        .auto_shrink([false, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                let mut switch_to: Option<usize> = None;
+                let mut close_idx: Option<usize> = None;
+
+                for (idx, tab) in manager.tabs.iter().enumerate() {
+                    if let Some(action) = show_tab(
+                        ui,
+                        theme,
+                        tab.title(),
+                        tab.dirty,
+                        Some(idx) == manager.active,
+                    ) {
+                        match action {
+                            TabAction::Switch => switch_to = Some(idx),
+                            TabAction::Close => {
+                                if close_request(idx) {
+                                    close_idx = Some(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(i) = switch_to {
+                    manager.active = Some(i);
+                }
+                if let Some(i) = close_idx {
+                    manager.close(i);
+                }
+            });
+        });
 }
 
 enum TabAction {

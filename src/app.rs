@@ -80,7 +80,10 @@ impl eframe::App for ArctisCodeApp {
                     .with_title(title)
                     // Transparent window, sharp (see main.rs).
                     .with_transparent(true)
-                    .with_drag_and_drop(true),
+                    .with_drag_and_drop(true)
+                    .with_fullsize_content_view(true)
+                    .with_titlebar_shown(false)
+                    .with_title_shown(false),
                 |vctx, _| windows[idx].render_window(vctx, theme, nvim, images, settings),
             );
             actions.extend(more);

@@ -24,6 +24,12 @@ use crate::theme::{
 };
 use std::path::PathBuf;
 
+/// Custom titlebar metrics: native traffic lights stay visible (macOS
+/// fullsize content view); this left pad keeps our content clear of them.
+pub const TITLEBAR_TRAFFIC_PAD: f32 = 78.0;
+pub const TITLEBAR_HEIGHT: f32 = 38.0;
+pub const TITLEBAR_SEARCH_W: f32 = 220.0;
+
 /// What the window's center area shows. Explorer picks the editor (and
 /// re-shows the sidebar); Tasks and Settings are full center pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -73,6 +79,8 @@ pub struct RepoWindow {
     pub(crate) new_entry: Option<NewEntryDialog>,
     pub cursor_pos: Option<(usize, usize)>,
     pub find_query: String,
+    /// Titlebar quick filter: substrings match file/folder names in the explorer.
+    pub explorer_filter: String,
     /// Folder row rects from the last frame, for hover-aware drops.
     pub folder_drop_rects: Vec<(egui::Rect, PathBuf)>,
     /// Activity-bar Explorer toggle.
@@ -107,6 +115,7 @@ impl RepoWindow {
             new_entry: None,
             cursor_pos: None,
             find_query: String::new(),
+            explorer_filter: String::new(),
             folder_drop_rects: Vec::new(),
             sidebar_visible: true,
             explorer_open: true,
@@ -583,6 +592,116 @@ impl RepoWindow {
         .inner
     }
 
+    fn show_titlebar(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &VscodeTheme,
+        guards: bool,
+    ) {
+        let titlebar_bg = theme.tabstrip_bg;
+        egui::TopBottomPanel::top("titlebar")
+            .exact_height(TITLEBAR_HEIGHT)
+            .frame(
+                egui::Frame::default()
+                    .fill(titlebar_bg)
+                    .inner_margin(egui::Margin {
+                        left: 0,
+                        right: 8,
+                        top: 0,
+                        bottom: 0,
+                    }),
+            )
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                    // Spacer for the native traffic lights (macOS
+                    // fullsize content view draws our content behind them).
+                    ui.add_space(TITLEBAR_TRAFFIC_PAD);
+                    // Explorer quick filter.
+                    let search_resp = ui.add_sized(
+                        egui::vec2(TITLEBAR_SEARCH_W, 24.0),
+                        egui::TextEdit::singleline(&mut self.explorer_filter)
+                            .hint_text("Search files…"),
+                    );
+                    if !self.explorer_filter.is_empty()
+                        && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                    {
+                        self.explorer_filter.clear();
+                    }
+                    // Esc clears the filter when the search box is focused.
+                    if search_resp.has_focus()
+                        && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
+                        self.explorer_filter.clear();
+                    }
+                    // Tabs fill the rest of the row (Editor view only).
+                    if self.center_view == CenterView::Editor {
+                        let dirty: Vec<bool> =
+                            self.tabs.tabs.iter().map(|t| t.dirty).collect();
+                        let mut pending: Option<usize> = None;
+                        crate::tabs::bar::show_row(ui, theme, &mut self.tabs, &mut |idx| {
+                            // Ask caller to confirm if dirty; return false to defer close.
+                            if dirty.get(idx).copied().unwrap_or(false) {
+                                pending = Some(idx);
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        if let Some(idx) = pending {
+                            if guards {
+                                self.confirm_close = Some(idx);
+                            } else {
+                                self.tabs.active = Some(idx);
+                                self.save_active(false);
+                                self.tabs.close(idx);
+                            }
+                        }
+                    } else {
+                        let label = match self.center_view {
+                            CenterView::Tasks => "Tasks",
+                            CenterView::Settings => "Settings",
+                            CenterView::Editor => "",
+                        };
+                        ui.label(
+                            egui::RichText::new(label)
+                                .size(12.0)
+                                .color(theme.muted),
+                        );
+                    }
+                });
+            });
+    }
+
+    /// Case-insensitive substring match for the explorer filter.
+    fn filter_matches(name: &str, query_lower: &str) -> bool {
+        name.to_lowercase().contains(query_lower)
+    }
+
+    /// True if any descendant of `dir` matches the filter (bounded walk so
+    /// huge repos don't stall the frame; cache makes repeats cheap).
+    fn dir_has_match(&mut self, dir: &std::path::Path, query_lower: &str, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let kids = self.tree.children_of(dir, depth);
+        let mut checked = 0;
+        for kid in kids {
+            checked += 1;
+            if checked > 500 {
+                break;
+            }
+            if Self::filter_matches(&kid.name(), query_lower) {
+                return true;
+            }
+            if kid.is_dir && self.dir_has_match(&kid.path, query_lower, depth + 1) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn show_tree(
         &mut self,
         ui: &mut egui::Ui,
@@ -712,15 +831,38 @@ impl RepoWindow {
         images: &mut ImageCache,
     ) {
         let kids = self.tree.children_of(dir, depth);
+        let query_lower = self.explorer_filter.trim().to_lowercase();
+        let filtering = !query_lower.is_empty();
+        let mut any_shown = false;
         for kid in kids {
             let name = kid.name();
             if kid.is_dir {
-                let expanded = self.tree.is_expanded(&kid.path);
+                // While filtering: show the folder if its own name matches
+                // or any descendant matches; auto-expand to reveal hits.
+                let expanded = if filtering {
+                    if !Self::filter_matches(&name, &query_lower)
+                        && !self.dir_has_match(&kid.path, &query_lower, depth + 1)
+                    {
+                        continue;
+                    }
+                    true
+                } else {
+                    self.tree.is_expanded(&kid.path)
+                };
                 let target = kid.path.clone();
                 let selected = self.tree.selected.as_ref() == Some(&target);
                 let zone_target = target.clone();
+                let folder_kind = icons::folder_kind_for(&name);
                 let (zone, dropped) = Self::clear_drop_zone(ui, |ui| {
-                    Self::tree_row(ui, theme, depth, Some(expanded), &name, selected)
+                    Self::tree_row(
+                        ui,
+                        theme,
+                        depth,
+                        Some(expanded),
+                        &name,
+                        selected,
+                        icons::TreeIcon::Folder(folder_kind),
+                    )
                 });
                 self.folder_drop_rects
                     .push((zone.response.rect, zone_target.clone()));
@@ -738,14 +880,31 @@ impl RepoWindow {
                 }
                 if zone.inner.clicked() {
                     self.tree.selected = Some(target.clone());
-                    self.tree.toggle(&target);
+                    // While filtering all folders render expanded; only
+                    // toggle real expansion when no filter is active.
+                    if !filtering {
+                        self.tree.toggle(&target);
+                    }
                 }
                 if expanded {
                     self.show_dir(ui, &target, depth + 1, theme, nvim, images);
                 }
+                any_shown = true;
             } else {
+                if filtering && !Self::filter_matches(&name, &query_lower) {
+                    continue;
+                }
                 let selected = self.tree.selected.as_ref() == Some(&kid.path);
-                let resp = Self::tree_row(ui, theme, depth, None, &name, selected);
+                let file_kind = icons::file_icon_for(&kid.path);
+                let resp = Self::tree_row(
+                    ui,
+                    theme,
+                    depth,
+                    None,
+                    &name,
+                    selected,
+                    icons::TreeIcon::File(file_kind),
+                );
                 if resp.drag_started() {
                     resp.dnd_set_drag_payload(TreeDragPayload(kid.path.clone()));
                 }
@@ -753,14 +912,22 @@ impl RepoWindow {
                     self.tree.selected = Some(kid.path.clone());
                     self.open_file(kid.path.clone(), nvim);
                 }
+                any_shown = true;
             }
+        }
+        if filtering && depth == 0 && !any_shown {
+            ui.label(
+                egui::RichText::new("No matches")
+                    .size(12.0)
+                    .color(theme.faint),
+            );
         }
     }
 
-    /// Full-sidebar-width tree row with no background by design: indent
-    /// guides plus text only. Selection reads as white vs grey text;
-    /// hover paints nothing. `twistie`: `None` for files,
-    /// `Some(expanded)` for folders.
+    /// Full-sidebar-width tree row (VSCode-style): selected paints
+    /// `list_active_sel`, hover paints `list_hover`. `twistie`:
+    /// `None` for files, `Some(expanded)` for folders. `icon` is the
+    /// Seti-style painter glyph (no assets, no textures — see `icons.rs`).
     fn tree_row(
         ui: &mut egui::Ui,
         theme: &VscodeTheme,
@@ -768,11 +935,19 @@ impl RepoWindow {
         twistie: Option<bool>,
         label: &str,
         selected: bool,
+        icon: icons::TreeIcon,
     ) -> egui::Response {
         let (rect, resp) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), TREE_ROW_HEIGHT),
             egui::Sense::click_and_drag(),
         );
+        if selected {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::ZERO, theme.list_active_sel);
+        } else if resp.hovered() {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::ZERO, theme.list_hover);
+        }
         let guide = theme.tree_guide.gamma_multiply(0.6);
         for level in 0..depth {
             let x = rect.min.x + 8.0 + level as f32 * TREE_INDENT;
@@ -794,6 +969,7 @@ impl RepoWindow {
         // Chevron gutter is reserved for files too, so file labels align
         // with folder labels exactly like VSCode.
         const CHEVRON_W: f32 = 16.0;
+        const ICON_W: f32 = 18.0;
         if let Some(expanded) = twistie {
             ui.painter().text(
                 egui::pos2(base_x + CHEVRON_W / 2.0, rect.center().y),
@@ -803,8 +979,16 @@ impl RepoWindow {
                 chevron_fg,
             );
         }
+        // Seti-style icon in its own slot (16px glyph in an 18px gutter).
+        // Folder open/closed follows the chevron state.
+        let expanded = twistie.unwrap_or(false);
+        let icon_rect = egui::Rect::from_min_size(
+            egui::pos2(base_x + CHEVRON_W + 1.0, rect.center().y - 8.0),
+            egui::vec2(16.0, 16.0),
+        );
+        icons::draw_tree_icon(ui.painter(), icon, icon_rect, theme, expanded);
         ui.painter().text(
-            egui::pos2(base_x + CHEVRON_W + 2.0, rect.center().y),
+            egui::pos2(base_x + CHEVRON_W + ICON_W, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
             font_id,
@@ -1176,6 +1360,10 @@ impl RepoWindow {
             }
         }
 
+        // Custom titlebar: native traffic lights + search + tabs in one row.
+        // Must come before side/central panels so it spans the full width.
+        self.show_titlebar(ctx, theme, guards);
+
         // Status bar: same 80/20 treatment as the sidebar in every state,
         // so opening a folder never shifts the chrome.
         let status_bg = theme.statusbar_bg;
@@ -1272,27 +1460,6 @@ impl RepoWindow {
             .show(ctx, |ui| {
                 match self.center_view {
                     CenterView::Editor => {
-                        let dirty: Vec<bool> =
-                            self.tabs.tabs.iter().map(|t| t.dirty).collect();
-                        let mut pending: Option<usize> = None;
-                        crate::tabs::bar::show(ui, theme, &mut self.tabs, |idx| {
-                            // Ask caller to confirm if dirty; return false to defer close.
-                            if dirty.get(idx).copied().unwrap_or(false) {
-                                pending = Some(idx);
-                                false
-                            } else {
-                                true
-                            }
-                        });
-                        if let Some(idx) = pending {
-                            if guards {
-                                self.confirm_close = Some(idx);
-                            } else {
-                                self.tabs.active = Some(idx);
-                                self.save_active(false);
-                                self.tabs.close(idx);
-                            }
-                        }
                         self.show_editor(ui, theme, nvim, images);
                     }
                     CenterView::Tasks => {

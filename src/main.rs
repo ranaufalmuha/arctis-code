@@ -13,7 +13,14 @@ fn main() -> eframe::Result<()> {
             // compositing on this stack). Only sidebar/status paints are
             // translucent; every other surface stays opaque.
             .with_transparent(true)
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            // macOS: content draws behind the transparent titlebar so our
+            // custom topbar (search + tabs) sits in the same visual row
+            // as the native traffic lights. Buttons stay visible; only
+            // the title text + bar fill are hidden.
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false),
         ..Default::default()
     };
 
