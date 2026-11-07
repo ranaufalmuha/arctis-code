@@ -163,7 +163,7 @@ impl Board {
         }
     }
 
-    pub fn add_card(&mut self, column: &str, title: String) -> String {
+    pub fn add_card(&mut self, column: &str, title: String, urgency: Urgency) -> String {
         let order = self
             .cards
             .iter()
@@ -180,7 +180,7 @@ impl Board {
             title,
             desc: String::new(),
             order,
-            urgency: Urgency::default(),
+            urgency,
         });
         self.normalize();
         id
@@ -333,7 +333,9 @@ pub fn save_tasks(path: &Path, board: &Board) -> anyhow::Result<()> {
 pub struct BoardState {
     pub board: Board,
     pub new_text: HashMap<String, String>,
+    pub new_urgency: HashMap<String, Urgency>,
     pub open: Option<OpenCard>,
+    pub adding_in_column: Option<String>,  // Track which column is in "add mode"
 }
 
 /// Draft being edited in the modal. Applied to the board on Save only.
@@ -350,7 +352,9 @@ impl BoardState {
         Self {
             board,
             new_text: HashMap::new(),
+            new_urgency: HashMap::new(),
             open: None,
+            adding_in_column: None,
         }
     }
 }
@@ -365,16 +369,16 @@ pub fn show_board(ui: &mut egui::Ui, theme: &VscodeTheme, state: &mut BoardState
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         ui.add_space(16.0);
-        ui.label(egui::RichText::new("Task board").size(16.0).color(theme.text));
+        ui.label(egui::RichText::new("Task board").size(18.0).strong().color(theme.text));
         ui.add_space(4.0);
         let total = state.board.cards.len();
         ui.label(egui::RichText::new(format!("{total} tasks")).size(12.0).color(theme.muted));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Drag cards to move · click to edit").size(11.0).color(theme.faint));
+            ui.label(egui::RichText::new("↔ Drag to move · Click to edit · Enter to save").size(11.0).color(theme.faint));
         });
     });
-    ui.add_space(10.0);
+    ui.add_space(14.0);
 
     // Rails stretch the full viewport height; each rail scrolls its own
     // cards (Trello layout). Measured before the scroll area (finite).
@@ -411,31 +415,39 @@ fn show_column(
     let mut mutated = false;
     let rail_accent = match col_id {
         "progress" => theme.accent,
-        "done" => egui::Color32::from_rgb(0x4C, 0xAF, 0x50),
+        "done" => theme.link,
         _ => theme.muted,
     };
     let mut card_rects = Vec::new();
+
     let rail = egui::Frame::default()
-        .fill(egui::Color32::from_rgb(0x12, 0x12, 0x12))
-        .stroke(egui::Stroke::new(1.0, theme.input_border))
-        .inner_margin(egui::Margin::same(10))
+        .fill(theme.card_bg)
+        .stroke(egui::Stroke::new(1.0, theme.widget_border))
+        .corner_radius(egui::CornerRadius::same(2))
+        .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
           ui.vertical(|ui| {
-            ui.set_width(264.0);
+            ui.set_width(280.0);
             ui.set_min_height(board_h - 14.0);
-            ui.horizontal(|ui| {
-                ui.painter().circle_filled(ui.cursor().min + egui::vec2(4.0, 9.0), 3.0, rail_accent);
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(col_title).size(13.0).strong().color(theme.text));
-                let n = state.board.column_cards(col_id).len();
-                egui::Frame::new().fill(theme.input_bg).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
-                    ui.label(egui::RichText::new(format!("{n}")).size(11.0).color(theme.muted));
-                });
-            });
-            ui.add_space(8.0);
 
-            // Cards scroll inside the rail; the add-row stays pinned below.
-            let scroll_h = (board_h - 120.0).max(200.0);
+            // Column header
+            ui.horizontal(|ui| {
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new(col_title).size(13.0).strong().color(theme.text));
+                ui.add_space(6.0);
+                let n = state.board.column_cards(col_id).len();
+                egui::Frame::new()
+                    .fill(theme.input_bg)
+                    .corner_radius(egui::CornerRadius::same(2))
+                    .inner_margin(egui::Margin::symmetric(6, 2))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(format!("{n}")).size(11.0).color(theme.muted));
+                    });
+            });
+            ui.add_space(10.0);
+
+            // Cards scroll - flexible height so add-card stays at bottom
+            let scroll_h = (board_h - 170.0).max(120.0);
             egui::ScrollArea::vertical()
                 .id_salt(("tasks-col", col_id.to_owned()))
                 .auto_shrink([false, false])
@@ -450,34 +462,138 @@ fn show_column(
                     for id in &ids {
                         let rect = show_card(ui, theme, state, id);
                         card_rects.push((id.clone(), rect));
+                        ui.add_space(8.0);
                     }
                     if ids.is_empty() {
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new("No tasks yet").size(12.0).color(theme.muted));
+                        ui.add_space(16.0);
+                        ui.centered_and_justified(|ui| {
+                            ui.label(egui::RichText::new("Drop cards here").size(11.0).color(theme.faint).italics());
+                        });
+                        ui.add_space(16.0);
                     }
-
                 });
 
-            // Add-card row: button or Enter commits non-empty drafts.
-            ui.horizontal(|ui| {
-                let draft = state.new_text.entry(col_id.to_string()).or_default();
-                let resp = ui.add_sized(
-                    egui::vec2((ui.available_width() - 48.0).max(80.0), 28.0),
-                    egui::TextEdit::singleline(draft)
-                        .hint_text("Add a card")
-                        .frame(true),
-                );
-                let enter = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (icons::primary_button(ui, theme, "+").clicked() || enter)
-                    && !draft.trim().is_empty()
-                {
-                    state.board.add_card(col_id, draft.trim().to_owned());
-                    state.new_text.insert(col_id.to_string(), String::new());
+            // Flexible space to push button to bottom
+            ui.add_space(8.0);
+
+            // Add-card button or form - at the bottom
+            let is_adding = state.adding_in_column.as_ref() == Some(&col_id.to_string());
+
+            // Use with_layout to align content at the bottom
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                if is_adding {
+                // Form to add card - wrapped in card-like frame
+                let mut draft = state.new_text.get(col_id).cloned().unwrap_or_default();
+                let mut current_urgency = state.new_urgency.get(col_id).copied().unwrap_or(Urgency::Medium);
+                let mut should_add = false;
+                let mut cancel_add = false;
+
+                egui::Frame::new()
+                    .fill(theme.widget_bg)
+                    .stroke(egui::Stroke::new(1.0, theme.widget_border))
+                    .corner_radius(egui::CornerRadius::same(2))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            // Title input
+                            let resp = ui.add_sized(
+                                egui::vec2(ui.available_width(), 28.0),
+                                egui::TextEdit::singleline(&mut draft)
+                                    .hint_text("Card title...")
+                                    .frame(true),
+                            );
+                            resp.request_focus();
+
+                            ui.add_space(6.0);
+
+                            // Priority selector
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Priority").size(10.0).color(theme.muted));
+                                ui.add_space(6.0);
+
+                                for level in [Urgency::Low, Urgency::Medium, Urgency::High] {
+                                    let is_selected = current_urgency == level;
+                                    let button_color = if is_selected {
+                                        level.color()
+                                    } else {
+                                        level.color().linear_multiply(0.3)
+                                    };
+
+                                    let button = egui::Button::new(
+                                        egui::RichText::new(level.label())
+                                            .size(10.0)
+                                            .color(if is_selected { egui::Color32::WHITE } else { button_color })
+                                    )
+                                    .fill(if is_selected { level.color().linear_multiply(0.25) } else { egui::Color32::TRANSPARENT })
+                                    .stroke(egui::Stroke::new(1.0, button_color))
+                                    .min_size(egui::vec2(45.0, 18.0));
+
+                                    if ui.add(button).clicked() {
+                                        current_urgency = level;
+                                    }
+                                }
+                            });
+
+                            ui.add_space(8.0);
+
+                            // Action buttons
+                            ui.horizontal(|ui| {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if icons::primary_button(ui, theme, "Add").clicked() && !draft.trim().is_empty() {
+                                        should_add = true;
+                                    }
+                                    if ui.button("Cancel").clicked() {
+                                        cancel_add = true;
+                                    }
+                                });
+                            });
+
+                            // Check for Enter key
+                            let enter = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if enter && !draft.trim().is_empty() {
+                                should_add = true;
+                            }
+
+                            // Check for Escape key
+                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                cancel_add = true;
+                            }
+                        });
+                    });
+
+                if should_add {
+                    state.board.add_card(col_id, draft.trim().to_owned(), current_urgency);
+                    state.new_text.remove(col_id);
+                    state.new_urgency.remove(col_id);
+                    state.adding_in_column = None;
                     mutated = true;
+                } else if cancel_add {
+                    state.new_text.remove(col_id);
+                    state.new_urgency.remove(col_id);
+                    state.adding_in_column = None;
+                } else {
+                    state.new_text.insert(col_id.to_string(), draft);
+                    state.new_urgency.insert(col_id.to_string(), current_urgency);
                 }
+            } else {
+                // Just the button
+                if ui.add_sized(
+                    egui::vec2(ui.available_width(), 32.0),
+                    egui::Button::new(egui::RichText::new("+ Add card").size(12.0).color(theme.muted))
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::new(1.0, theme.widget_border))
+                ).clicked() {
+                    state.adding_in_column = Some(col_id.to_string());
+                }
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
             });
           });
         });
+
     if let (Some(payload), Some(pointer)) = (
         egui::DragAndDrop::payload::<CardDrag>(ui.ctx()),
         ui.ctx().pointer_interact_pos(),
@@ -490,9 +606,9 @@ fn show_column(
                 .find(|(_, card)| pointer.y <= card.center().y)
                 .map(|(_, card)| card.top() - 2.0)
                 .or_else(|| card_rects.iter().filter(|(id, _)| id != &payload.0).last().map(|(_, card)| card.bottom() + 2.0))
-                .unwrap_or(rect.top() + 42.0)
+                .unwrap_or(rect.top() + 60.0)
                 .clamp(rect.top() + 2.0, rect.bottom() - 2.0);
-            ui.painter().line_segment([egui::pos2(rect.left() + 10.0, y), egui::pos2(rect.right() - 10.0, y)], egui::Stroke::new(2.0, theme.accent));
+            ui.painter().line_segment([egui::pos2(rect.left() + 12.0, y), egui::pos2(rect.right() - 12.0, y)], egui::Stroke::new(2.0, rail_accent));
             if ui.input(|i| i.pointer.any_released()) {
                 mutated |= state.board.move_card_to(&payload.0, col_id, index);
                 egui::DragAndDrop::take_payload::<CardDrag>(ui.ctx());
@@ -528,33 +644,84 @@ fn show_card(ui: &mut egui::Ui, theme: &VscodeTheme, state: &mut BoardState, id:
         return egui::Rect::NOTHING;
     };
     let width = ui.available_width();
+
+    // Card with design system colors
     let frame = egui::Frame::new()
-            .fill(theme.input_bg)
-            .stroke(egui::Stroke::new(1.0, theme.input_border))
-            .corner_radius(egui::CornerRadius::same(4))
-            .inner_margin(egui::Margin::same(10))
-            .show(ui, |ui| {
-                ui.set_min_width((width - 22.0).max(0.0));
-                ui.set_max_width((width - 22.0).max(0.0));
-                ui.label(egui::RichText::new(if card.title.is_empty() { "(untitled)" } else { &card.title }).size(13.0).color(theme.text));
-                if !card.desc.is_empty() {
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new(preview_text(&card.desc)).size(12.0).color(theme.muted));
-                }
-                ui.add_space(8.0);
-                egui::Frame::new().fill(card.urgency.color().linear_multiply(0.12))
-                    .corner_radius(egui::CornerRadius::same(3))
+        .fill(theme.widget_bg)
+        .stroke(egui::Stroke::new(1.0, theme.widget_border))
+        .corner_radius(egui::CornerRadius::same(2))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_min_width((width - 22.0).max(0.0));
+            ui.set_max_width((width - 22.0).max(0.0));
+
+            // Priority badge at top
+            ui.horizontal(|ui| {
+                egui::Frame::new()
+                    .fill(card.urgency.color().linear_multiply(0.12))
+                    .stroke(egui::Stroke::new(1.0, card.urgency.color().linear_multiply(0.6)))
+                    .corner_radius(egui::CornerRadius::same(2))
                     .inner_margin(egui::Margin::symmetric(6, 2))
-                    .show(ui, |ui| { ui.label(egui::RichText::new(card.urgency.label()).size(11.0).color(card.urgency.color())); });
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(card.urgency.label())
+                                .size(10.0)
+                                .color(card.urgency.color())
+                        );
+                    });
             });
-    let response = ui.interact(frame.response.rect, egui::Id::new(("task-drag", id)), egui::Sense::click_and_drag())
-        .on_hover_cursor(egui::CursorIcon::Grab)
-        .on_hover_text("Drag to move · click to edit");
+
+            ui.add_space(6.0);
+
+            // Card title
+            ui.label(
+                egui::RichText::new(if card.title.is_empty() {
+                    "(untitled)"
+                } else {
+                    &card.title
+                })
+                .size(13.0)
+                .color(theme.text)
+            );
+
+            // Card description preview
+            if !card.desc.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(preview_text(&card.desc))
+                        .size(11.0)
+                        .color(theme.muted)
+                );
+            }
+        });
+
+    let response = ui.interact(
+        frame.response.rect,
+        egui::Id::new(("task-drag", id)),
+        egui::Sense::click_and_drag()
+    )
+    .on_hover_cursor(egui::CursorIcon::Grab);
+
+    // Hover effect
+    if response.hovered() {
+        ui.painter().rect_stroke(
+            frame.response.rect,
+            2.0,
+            egui::Stroke::new(1.0, theme.focus_border),
+            egui::StrokeKind::Outside
+        );
+    }
+
     if response.dragged() {
         egui::DragAndDrop::set_payload(ui.ctx(), CardDrag(id.to_owned()));
     }
     if response.clicked() {
-        state.open = Some(OpenCard { id: card.id, title: card.title, desc: card.desc, urgency: card.urgency });
+        state.open = Some(OpenCard {
+            id: card.id,
+            title: card.title,
+            desc: card.desc,
+            urgency: card.urgency
+        });
     }
     response.rect
 }
@@ -676,9 +843,9 @@ mod tests {
 
     fn seeded() -> Board {
         let mut b = Board::empty();
-        b.add_card("plan", "first".into());
-        b.add_card("plan", "second".into());
-        b.add_card("progress", "wip".into());
+        b.add_card("plan", "first".into(), Urgency::Medium);
+        b.add_card("plan", "second".into(), Urgency::Medium);
+        b.add_card("progress", "wip".into(), Urgency::High);
         b
     }
 

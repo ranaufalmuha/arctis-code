@@ -1,5 +1,5 @@
 /// Git status tracking for file/folder change highlighting in the explorer.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -35,6 +35,21 @@ pub struct GitHistoryOptions {
     pub since: Option<chrono::DateTime<chrono::Utc>>,
     pub until: Option<chrono::DateTime<chrono::Utc>>,
     pub path_filter: Option<String>,
+}
+
+/// Line-level change info for a single file
+#[derive(Debug, Default, Clone)]
+pub struct FileDiff {
+    /// Set of line numbers that were added (1-indexed)
+    pub added_lines: HashSet<usize>,
+    /// Set of line numbers that were modified (1-indexed)
+    pub modified_lines: HashSet<usize>,
+}
+
+impl FileDiff {
+    pub fn is_empty(&self) -> bool {
+        self.added_lines.is_empty() && self.modified_lines.is_empty()
+    }
 }
 
 impl GitCommit {
@@ -120,6 +135,8 @@ pub struct GitChangeTracker {
     changed: HashSet<String>,
     /// Repo root this tracker is for
     repo_root: Option<PathBuf>,
+    /// Line-level diffs for changed files (relative paths, normalized with /)
+    line_changes: HashMap<String, FileDiff>,
 }
 
 impl GitChangeTracker {
@@ -180,6 +197,140 @@ impl GitChangeTracker {
         old != self.changed
     }
 
+    /// Refresh line-level changes for all changed files
+    pub fn refresh_all_line_changes(&mut self, repo_path: &Path) {
+        let mut paths_to_update: Vec<PathBuf> = vec![];
+
+        if let Some(root) = &self.repo_root {
+            for changed_path in &self.changed {
+                let full_path = root.join(changed_path.replace('/', "\\"));
+                if full_path.exists() && full_path.is_file() {
+                    paths_to_update.push(full_path);
+                }
+            }
+        }
+
+        for path in paths_to_update {
+            self.update_line_changes(repo_path, &path);
+        }
+    }
+
+    /// Update line-level changes for a specific file
+    fn update_line_changes(&mut self, repo_path: &Path, file_path: &Path) {
+        // Get relative path first
+        let rel_str = if let Some(root) = &self.repo_root {
+            match file_path.strip_prefix(root) {
+                Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+                Err(_) => return,
+            }
+        } else {
+            return;
+        };
+
+        // Parse git diff to find added and modified lines
+        // - Lines with + prefix and no corresponding - in the same hunk = added
+        // - Lines where - and + appear together for the same position = modified
+        // - Deleted-only lines are ignored (per user request)
+        let output = Command::new("git")
+            .args(["-C"])
+            .arg(repo_path)
+            .args(["diff", "--unified=0", "--", &file_path.to_string_lossy()])
+            .output();
+
+        let Ok(output) = output else {
+            return;
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut added_lines: HashSet<usize> = HashSet::new();
+        let mut modified_lines: HashSet<usize> = HashSet::new();
+
+        let mut in_hunk = false;
+        let mut new_line = 0usize;
+        let mut hunk_has_deletions = false;
+        let mut hunk_new_lines: Vec<usize> = Vec::new();
+
+        for line in stdout.lines() {
+            if line.starts_with("@@") {
+                // Flush previous hunk
+                if !hunk_new_lines.is_empty() {
+                    if hunk_has_deletions {
+                        // Hunk had both deletions and additions -> treat additions as modifications
+                        for ln in hunk_new_lines.drain(..) {
+                            modified_lines.insert(ln);
+                        }
+                    } else {
+                        // Only additions -> purely added lines
+                        for ln in hunk_new_lines.drain(..) {
+                            added_lines.insert(ln);
+                        }
+                    }
+                }
+                hunk_has_deletions = false;
+
+                // Parse: @@ -old_start[,old_count] +new_start[,new_count] @@
+                in_hunk = true;
+                new_line = 0;
+                if let Some(plus_pos) = line.find('+') {
+                    let rest = &line[plus_pos + 1..];
+                    let end = rest.find(|c: char| c == ',' || c == ' ' || c == '@').unwrap_or(rest.len());
+                    if let Ok(n) = rest[..end].parse::<usize>() {
+                        new_line = n;
+                    }
+                }
+                continue;
+            }
+
+            if !in_hunk {
+                continue;
+            }
+
+            if line.starts_with('+') && !line.starts_with("+++") {
+                if new_line > 0 {
+                    hunk_new_lines.push(new_line);
+                }
+                new_line += 1;
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                hunk_has_deletions = true;
+                // Don't increment new_line for deleted lines
+            } else if line.starts_with('\\') {
+                // "\ No newline at end of file" - skip
+            }
+            // Context lines (shouldn't appear with --unified=0, but ignore safely)
+        }
+
+        // Flush last hunk
+        if !hunk_new_lines.is_empty() {
+            if hunk_has_deletions {
+                for ln in hunk_new_lines.drain(..) {
+                    modified_lines.insert(ln);
+                }
+            } else {
+                for ln in hunk_new_lines.drain(..) {
+                    added_lines.insert(ln);
+                }
+            }
+        }
+
+        self.line_changes.insert(
+            rel_str,
+            FileDiff {
+                added_lines,
+                modified_lines,
+            },
+        );
+    }
+
+    /// Get line-level diff for a file
+    pub fn get_line_diff(&self, path: &Path) -> Option<&FileDiff> {
+        let rel_str = path
+            .strip_prefix(self.repo_root.as_ref()?)
+            .ok()?
+            .to_string_lossy()
+            .replace('\\', "/");
+        self.line_changes.get(&rel_str)
+    }
+
     /// Check if a path (absolute) has git changes.
     pub fn is_changed(&self, path: &Path) -> bool {
         let Some(root) = &self.repo_root else {
@@ -215,5 +366,6 @@ impl GitChangeTracker {
     pub fn clear(&mut self) {
         self.changed.clear();
         self.repo_root = None;
+        self.line_changes.clear();
     }
 }

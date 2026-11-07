@@ -7,6 +7,7 @@ use crate::project::opener;
 use crate::settings::Settings;
 use crate::tabs::TabKind;
 use crate::theme::VscodeTheme;
+use std::collections::HashSet;
 
 impl RepoWindow {
     pub(super) fn show_editor(
@@ -163,6 +164,30 @@ impl RepoWindow {
         let gutter_mono = mono_id.clone();
         let gutter_fg = theme.gutter_fg;
         let gutter_active = theme.gutter_active_fg;
+
+        // Git change highlighting colors
+        let git_added = egui::Color32::from_rgb(76, 175, 80); // Green (accent color from theme)
+        let git_modified = egui::Color32::from_rgb(33, 150, 243); // Blue
+
+        // Get git change info for active tab path
+        let git_highlight_added: HashSet<usize>;
+        let git_highlight_modified: HashSet<usize>;
+
+        if let Some(tab) = self.tabs.tabs.get(idx) {
+            let path = &tab.path;
+            let diff = self.git_changes.get_line_diff(path);
+            if let Some(diff) = diff {
+                git_highlight_added = diff.added_lines.clone();
+                git_highlight_modified = diff.modified_lines.clone();
+            } else {
+                git_highlight_added = HashSet::new();
+                git_highlight_modified = HashSet::new();
+            }
+        } else {
+            git_highlight_added = HashSet::new();
+            git_highlight_modified = HashSet::new();
+        }
+
         let mut gutter_layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
             let mut job = egui::text::LayoutJob::default();
             for (i, line) in text.as_str().split('\n').enumerate() {
@@ -173,11 +198,18 @@ impl RepoWindow {
                         egui::text::TextFormat::simple(gutter_mono.clone(), gutter_fg),
                     );
                 }
-                let color = if Some(i + 1) == active_line {
-                    gutter_active
-                } else {
-                    gutter_fg
-                };
+                let line_num = i + 1;
+                let mut color = gutter_fg;
+
+                // Apply git change highlighting (note: deleted lines are NOT shown per user request)
+                if git_highlight_added.contains(&line_num) {
+                    color = git_added;
+                } else if git_highlight_modified.contains(&line_num) {
+                    color = git_modified;
+                } else if Some(line_num) == active_line {
+                    color = gutter_active;
+                }
+
                 let number = line.trim_start();
                 let number_width = ui.fonts(|f| f.layout_no_wrap(number.to_owned(), gutter_mono.clone(), color)).size().x;
                 job.append(
