@@ -2,6 +2,83 @@
 
 Lightweight native Rust code editor — `egui` + embedded Neovim. No Electron / WebView / Tauri.
 
+## Features
+
+- **Native Performance** — Built with Rust and egui for minimal memory footprint
+- **Neovim Integration** — Embedded Neovim backend with fallback to native editing
+- **Task Board** — Trello-style task management per workspace
+- **Multi-window Support** — Work with multiple repositories simultaneously
+- **Transparent UI** — Modern transparent sidebar with VSCode-like design
+
+## Installation
+
+### Prerequisites
+
+- **Rust** 1.70 or later — [Install Rust](https://rustup.rs/)
+- **Neovim** (optional) — For enhanced editing experience
+- **macOS** (primary platform) — Linux/Windows support experimental
+
+### Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/ranaufalmuha/arctis-code.git
+cd arctis-code
+
+# Build in release mode (recommended)
+cargo build --release
+
+# Run the editor
+./target/release/arctis-code
+
+# Or open a specific project
+./target/release/arctis-code -- ./my-project
+```
+
+### macOS App Bundle
+
+For macOS users, you can build a native `.app` bundle:
+
+```bash
+# Build the app bundle
+./scripts/build-macos.sh
+
+# The app will be available at:
+# target/release/ArctisCode.app
+```
+
+You can then drag it to your Applications folder.
+
+### Development Build
+
+```bash
+# Build in debug mode (faster compile, slower runtime)
+cargo build
+
+# Run with debug logging
+RUST_LOG=debug cargo run -- ./my-project
+```
+
+## Quick Start
+
+1. **Open a Project**
+   - Press `Cmd/Ctrl+O` to open a folder
+   - Or drag and drop a folder into the window
+   - Or run `arctis-code -- /path/to/project`
+
+2. **Navigate Files**
+   - Use the Explorer sidebar (Cmd/Ctrl+B to toggle)
+   - Click files to open in editor tabs
+
+3. **Task Board**
+   - Switch to Tasks view in the activity bar
+   - Create cards with title and priority
+   - Drag cards between columns (Plan → In Progress → Done)
+
+4. **Settings**
+   - Adjust font sizes, enable confirm-before-close
+   - Settings auto-save to `~/.arctis.json`
+
 ## Layout
 
 - `src/` — all Rust code (`main.rs`, `app.rs`, `window/` split by view/io/chrome, `theme.rs`, `tasks.rs`, `settings.rs`, `project/`, `explorer/`, `tabs/`, `editor/`, `preview/`, `safety.rs`)
@@ -44,6 +121,23 @@ cargo run -- ./some/project
 # or open the GUI, then Cmd/Ctrl+O or drop a folder in
 ```
 
+### Environment Variables
+
+```bash
+# Disable Neovim integration (use native editor only)
+ARCTIS_NO_NVIM=1 cargo run -- ./my-project
+
+# Enable debug logging
+RUST_LOG=debug cargo run
+
+# Build release binary with optimizations
+cargo build --release
+./target/release/arctis-code -- ./my-project
+```
+
+> **Tip:** For daily use, prefer `cargo run --release`: debug builds decode image
+> previews ~10× slower (seconds for multi-megapixel photos vs ~100ms).
+
 ## Multiple windows (multi-repo)
 
 Press `Shift+Cmd/Ctrl+N` for a new OS window, then open another repo in it.
@@ -70,6 +164,50 @@ cargo build
 ```
 
 See `docs/HOTRELOAD.md`. Release `ArctisCode` stays statically linked.
+
+## Testing
+
+```bash
+# Run all tests
+cargo test --lib
+
+# Run tests for specific module
+cargo test --lib tasks::
+
+# Run tests with logging
+RUST_LOG=debug cargo test --lib -- --nocapture
+```
+
+## Contributing
+
+This repository uses branch protection on `main` and `test` branches:
+
+- All changes require a **Pull Request**
+- PRs must be **approved** before merging
+- Tests must pass before merge
+- Force push and deletions are disabled
+
+### Workflow
+
+1. Create a feature branch from `dev`:
+   ```bash
+   git checkout -b feat/your-feature
+   ```
+
+2. Make your changes and test:
+   ```bash
+   cargo test --lib
+   cargo build --release
+   ```
+
+3. Commit and push:
+   ```bash
+   git commit -m "feat: describe your changes"
+   git push origin feat/your-feature
+   ```
+
+4. Open a Pull Request on GitHub
+5. Wait for approval and merge
 
 ## OpenCode skills
 
