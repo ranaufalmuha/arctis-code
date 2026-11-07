@@ -25,18 +25,31 @@ Performance targets (startup, RSS, open latency) are tracked in
 - **Rust** 1.88 or later (edition 2021) — [Install Rust](https://rustup.rs/)
 - **Neovim** (optional) — for the embedded editing backend; without it the
   app falls back to native editing with a status-bar warning
-- **macOS** is the primary, fully supported platform. Linux and Windows
-  builds are experimental: the macOS app bundle, Dock recent-projects, and
-  ad-hoc signing paths do not apply there.
-
-### Build from Source
+- **A working OpenGL driver** — the app renders through `glow` (OpenGL), so
+  it needs GPU/GL support on every platform; a headless box with no GL
+  driver will not start
 
 ```bash
-# Clone the repository
 git clone https://github.com/ranaufalmuha/arctis-code.git
 cd arctis-code
+```
 
-# Build the release binary (recommended)
+### Build per platform
+
+The binary is named `ArctisCode` (see `[[bin]]` in `Cargo.toml`). The
+`arctis-host` binary is a separate development-only entry point.
+
+**macOS is the primary, fully supported platform.** Linux and Windows
+type-check but have not been linked or run by the maintainers — treat them
+as experimental, and expect to fix things yourself.
+
+#### macOS — fully supported
+
+Requires the Xcode Command Line Tools (`xcode-select --install`): the build
+script `build.rs` compiles `packaging/macos/dock.m` with `clang` and links
+`AppKit`, and the bundle script uses `sips`, `iconutil`, and `codesign`.
+
+```bash
 cargo build --release
 
 # Run it, optionally opening a project
@@ -44,8 +57,54 @@ cargo build --release
 ./target/release/ArctisCode ./my-project
 ```
 
-The binary is named `ArctisCode` (see `[[bin]]` in `Cargo.toml`). The
-`arctis-host` binary is a separate development-only entry point.
+This is the one platform where the full build has been verified end to end.
+For a double-clickable, ad-hoc signed bundle, see
+[macOS App Bundle](#macos-app-bundle).
+
+#### Linux — experimental
+
+```bash
+cargo build --release
+./target/release/ArctisCode ./my-project
+```
+
+Verified: `cargo check --target x86_64-unknown-linux-gnu` passes with 0
+errors. **Not verified:** linking and running, so the runtime library list
+below is the best available reading of the dependency graph rather than a
+tested recipe.
+
+- Windowing comes from winit with both backends compiled in (`x11` and
+  `wayland`, per its default features). Both are **dlopen'd at runtime**, so
+  you need a running X11 or Wayland session plus the usual client libraries;
+  a build does not link them, but startup fails without them.
+- GL/EGL comes from `glutin`/`khronos-egl`, likewise loaded at runtime — a
+  Mesa or vendor driver must be present.
+- File dialogs use `rfd`'s `xdg-portal` backend, so a desktop portal service
+  must be running (this is not a GTK3 build).
+- Nothing here links OpenSSL: there is no `openssl`, `rustls`, or
+  `native-tls` in `Cargo.lock`, so the `libssl-dev` line in egui's upstream
+  instructions does not apply to this project.
+
+#### Windows — experimental
+
+```bash
+cargo build --release
+.\target\release\ArctisCode.exe .\my-project
+```
+
+Verified: `cargo check --target x86_64-pc-windows-msvc` passes with 0 errors.
+**Not verified:** linking and running. Building for the MSVC target needs the
+Visual Studio Build Tools (the linker), not just the Rust toolchain.
+
+Two known gaps on Windows:
+
+- The app has no `windows_subsystem` attribute, so a console window opens
+  alongside the GUI window.
+- The transparent window and custom titlebar in `src/main.rs`
+  (`with_transparent`, `with_fullsize_content_view`, `with_titlebar_shown`,
+  `with_title_shown`) are macOS-only egui options. They are ignored on other
+  platforms, so expect the default system titlebar rather than the
+  macOS-style chrome.
 
 ### macOS App Bundle
 
