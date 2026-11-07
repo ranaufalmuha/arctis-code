@@ -240,11 +240,14 @@ impl RepoWindow {
                 let target = kid.path.clone();
                 self.visible_paths.push(target.clone());
                 let selected = self.selected_paths.contains(&target) || (self.selected_paths.is_empty() && self.tree.selected.as_ref() == Some(&target));
-                let zone_target = target.clone();
                 let folder_kind = icons::folder_kind_for(&name);
+                let git_changed = self.git_changes.is_changed(&target);
+                let git_dir_changed = self.git_changes.has_changed_children(&target);
                 let row = Self::tree_row(
                     ui, theme, depth, Some(expanded), &name, selected,
                     icons::TreeIcon::Folder(folder_kind),
+                    git_changed,
+                    git_dir_changed,
                 );
                 self.handle_tree_row(ui, &row, &target, true, depth, theme, nvim, images);
                 if row.clicked() && !ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.shift) && !filtering {
@@ -255,7 +258,7 @@ impl RepoWindow {
                 }
                 let bottom = ui.min_rect().bottom().max(row.rect.bottom());
                 let area = egui::Rect::from_min_max(row.rect.min, egui::pos2(row.rect.right(), bottom)).intersect(ui.clip_rect());
-                if area.is_positive() { self.folder_drop_rects.push((area, zone_target)); }
+                if area.is_positive() { self.folder_drop_rects.push((area, target)); }
                 any_shown = true;
             } else {
                 if filtering && !Self::filter_matches(&name, &query_lower) {
@@ -264,6 +267,7 @@ impl RepoWindow {
                 self.visible_paths.push(kid.path.clone());
                 let selected = self.selected_paths.contains(&kid.path) || (self.selected_paths.is_empty() && self.tree.selected.as_ref() == Some(&kid.path));
                 let file_kind = icons::file_icon_for(&kid.path);
+                let git_changed = self.git_changes.is_changed(&kid.path);
                 let resp = Self::tree_row(
                     ui,
                     theme,
@@ -272,6 +276,8 @@ impl RepoWindow {
                     &name,
                     selected,
                     icons::TreeIcon::File(file_kind),
+                    git_changed,
+                    false, // files don't have children
                 );
                 self.handle_tree_row(ui, &resp, &kid.path, false, depth, theme, nvim, images);
                 any_shown = true;
@@ -466,18 +472,36 @@ impl RepoWindow {
         label: &str,
         selected: bool,
         icon: icons::TreeIcon,
+        git_changed: bool,
+        git_dir_changed: bool,
     ) -> egui::Response {
         let (rect, resp) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), TREE_ROW_HEIGHT),
             egui::Sense::click_and_drag(),
         );
+        let accent = theme.accent;
+        let list_sel_fg = theme.list_sel_fg;
+        let text = theme.text;
+        let muted = theme.muted;
+        let _widget_bg = theme.widget_bg;
+
+        // Determine text color based on git status
+        let fg = if git_changed || git_dir_changed {
+            // Changed files/folders get accent color
+            accent
+        } else if selected {
+            list_sel_fg
+        } else {
+            text
+        };
+
         if selected {
             ui.painter()
                 .rect_filled(rect, egui::CornerRadius::ZERO, theme.list_active_sel);
             ui.painter().rect_filled(
                 egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
                 0.0,
-                theme.accent,
+                accent,
             );
         } else if resp.hovered() {
             ui.painter()
@@ -489,17 +513,14 @@ impl RepoWindow {
             ui.painter()
                 .vline(x, rect.y_range(), egui::Stroke::new(1.0, guide));
         }
-        let fg = if selected {
-            theme.list_sel_fg
-        } else {
-            theme.text
-        };
+
         let chevron_fg = if selected {
-            theme.list_sel_fg
+            list_sel_fg
         } else {
-            theme.muted
+            muted
         };
         let font_id = egui::TextStyle::Body.resolve(ui.style());
+        let font_id_badge = font_id.clone();
         let base_x = rect.min.x + depth as f32 * TREE_INDENT + 4.0;
         // Chevron gutter is reserved for files too, so file labels align
         // with folder labels exactly like VSCode.
@@ -529,6 +550,22 @@ impl RepoWindow {
             font_id,
             fg,
         );
+        // Add git change badge if file is changed
+        if git_changed || git_dir_changed {
+            let badge_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.right() - 6.0 - 8.0, rect.center().y - 6.0),
+                egui::vec2(8.0, 8.0),
+            );
+            ui.painter().rect_filled(badge_rect, 1.0, accent);
+            ui.painter().text(
+                badge_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "+",
+                font_id_badge,
+                text,
+            );
+        }
+
         resp.on_hover_text(label)
     }
 }

@@ -7,12 +7,14 @@
 //! buffer, and concurrent saves meet the existing guarded-write dialog.
 
 mod chrome;
+mod commit_history;
 mod editor_view;
 mod io;
 mod tree_view;
 
 use crate::editor::{HlCache, NeovimBackend};
 use crate::explorer::FileTree;
+use crate::git::GitChangeTracker;
 use crate::icons;
 use crate::preview::ImageCache;
 use crate::project::entry::EntryKind;
@@ -131,6 +133,10 @@ pub struct RepoWindow {
     /// Workspace task board + the file it persists to.
     pub tasks: BoardState,
     pub tasks_path: PathBuf,
+    /// Git commit history panel state.
+    pub commit_history: commit_history::CommitHistoryPanel,
+    /// Tracks changed files/folders in git for highlighting in explorer.
+    git_changes: GitChangeTracker,
 }
 
 impl RepoWindow {
@@ -173,6 +179,8 @@ impl RepoWindow {
             edit_prev: String::new(),
             tasks: BoardState::new(tasks::load_tasks(&tasks::global_tasks_path()).0),
             tasks_path: tasks::global_tasks_path(),
+            commit_history: commit_history::CommitHistoryPanel::default(),
+            git_changes: GitChangeTracker::new(),
         }
     }
 
@@ -281,6 +289,15 @@ impl RepoWindow {
                 crate::project::watcher::FsEvent::NeedsRefresh => self.refresh_tree(),
             }
         }
+
+        // Refresh git status if we have a project root
+        if let Some(ref root) = self.project.root {
+            if self.git_changes.refresh(root) {
+                // Git status changed, trigger tree refresh to update visual indicators
+                self.refresh_tree();
+            }
+        }
+
         self.handle_drops(ctx, nvim, images);
 
         // Keyboard: Cmd/Ctrl+O open, Cmd/Ctrl+S save, Cmd/Ctrl+W close tab,
@@ -341,6 +358,16 @@ impl RepoWindow {
             ))
         }) {
             actions.push(WindowAction::NewWindow);
+        }
+        // Cmd/Ctrl+Shift+H to toggle commit history panel
+        if ctx.input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::H,
+            ))
+        }) {
+            let repo_path = self.project.root.clone();
+            self.commit_history.toggle(repo_path);
         }
 
         // Viewport close (red traffic light): dirty tabs cancel the close
@@ -468,6 +495,14 @@ impl RepoWindow {
                 });
             self.sidebar_width = panel.response.rect.width();
         }
+
+        // Commit history panel (right side)
+        commit_history::render_commit_history(
+            &mut self.commit_history,
+            self.project.root.as_ref(),
+            ctx,
+            theme,
+        );
 
         // Center content follows the activity-bar view.
         let editor_bg = theme.editor_bg;

@@ -3,6 +3,7 @@ pub mod app_icon;
 pub mod recent;
 pub mod editor;
 pub mod explorer;
+pub mod git;
 pub mod icons;
 pub mod preview;
 pub mod project;

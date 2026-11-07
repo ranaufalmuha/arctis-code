@@ -17,7 +17,7 @@
     "cards": [
       {
         "id": "c1",
-        "column": "plan",
+        "column": "progress",
         "title": "github",
         "desc": "",
         "order": 0,
@@ -25,7 +25,7 @@
       },
       {
         "id": "c2",
-        "column": "progress",
+        "column": "done",
         "title": "static files",
         "desc": "",
         "order": 0,
