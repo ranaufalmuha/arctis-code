@@ -4,19 +4,30 @@ Lightweight native Rust code editor — `egui` + embedded Neovim. No Electron / 
 
 ## Features
 
-- **Native Performance** — Built with Rust and egui for minimal memory footprint
-- **Neovim Integration** — Embedded Neovim backend with fallback to native editing
-- **Task Board** — Trello-style task management per workspace
-- **Multi-window Support** — Work with multiple repositories simultaneously
-- **Transparent UI** — Modern transparent sidebar with VSCode-like design
+- **Native app** — Rust + `egui`, rendered directly through OpenGL; no
+  Electron, WebView, or Tauri layer
+- **Neovim integration** — embedded backend runs `nvim` headless on a
+  background thread, with native editing as the fallback
+- **Task board** — Trello-style board (Plan / In Progress / Done) stored per
+  workspace in `.arctis.json`
+- **Multi-window** — one OS window per repository, sharing the Neovim
+  backend and image cache
+- **Transparent chrome** — sidebar, activity bar, and status bar are 80%
+  black / 20% see-through, with the editor kept opaque
+
+Performance targets (startup, RSS, open latency) are tracked in
+[`docs/PERF.md`](docs/PERF.md) — measure them, don't assume them.
 
 ## Installation
 
 ### Prerequisites
 
-- **Rust** 1.70 or later — [Install Rust](https://rustup.rs/)
-- **Neovim** (optional) — For enhanced editing experience
-- **macOS** (primary platform) — Linux/Windows support experimental
+- **Rust** 1.88 or later (edition 2021) — [Install Rust](https://rustup.rs/)
+- **Neovim** (optional) — for the embedded editing backend; without it the
+  app falls back to native editing with a status-bar warning
+- **macOS** is the primary, fully supported platform. Linux and Windows
+  builds are experimental: the macOS app bundle, Dock recent-projects, and
+  ad-hoc signing paths do not apply there.
 
 ### Build from Source
 
@@ -25,38 +36,38 @@ Lightweight native Rust code editor — `egui` + embedded Neovim. No Electron / 
 git clone https://github.com/ranaufalmuha/arctis-code.git
 cd arctis-code
 
-# Build in release mode (recommended)
+# Build the release binary (recommended)
 cargo build --release
 
-# Run the editor
-./target/release/arctis-code
-
-# Or open a specific project
-./target/release/arctis-code -- ./my-project
+# Run it, optionally opening a project
+./target/release/ArctisCode
+./target/release/ArctisCode ./my-project
 ```
+
+The binary is named `ArctisCode` (see `[[bin]]` in `Cargo.toml`). The
+`arctis-host` binary is a separate development-only entry point.
 
 ### macOS App Bundle
 
-For macOS users, you can build a native `.app` bundle:
+On macOS you can build a native `.app` bundle:
 
 ```bash
-# Build the app bundle
 ./scripts/build-macos.sh
-
-# The app will be available at:
-# target/release/ArctisCode.app
+# → target/release/ArctisCode.app
 ```
 
-You can then drag it to your Applications folder.
+The script renders `public/icons/logo.svg` into the bundle icon and signs
+the bundle **ad hoc** for local use. Public distribution requires an Apple
+Developer ID signature and notarization, which the script does not perform.
+The build matches the architecture of the machine running it. Drag the
+result into `/Applications` to install it.
 
 ### Development Build
 
 ```bash
-# Build in debug mode (faster compile, slower runtime)
+# Debug build (faster to compile, slower at runtime)
 cargo build
-
-# Run with debug logging
-RUST_LOG=debug cargo run -- ./my-project
+cargo run -- ./my-project
 ```
 
 ## Quick Start
@@ -64,15 +75,17 @@ RUST_LOG=debug cargo run -- ./my-project
 1. **Open a Project**
    - Press `Cmd/Ctrl+O` to open a folder
    - Or drag and drop a folder into the window
-   - Or run `arctis-code -- /path/to/project`
+   - Or pass a path as the first argument: `ArctisCode ./my-project`
+     (there is no flag parsing — the first argument *is* the path; a bare
+     `--` would be read as the path itself)
 
 2. **Navigate Files**
-   - Use the Explorer sidebar (Cmd/Ctrl+B to toggle)
-   - Click files to open in editor tabs
+   - Use the Explorer sidebar (`Cmd/Ctrl+B` to toggle)
+   - Click files to open them in editor tabs
 
 3. **Task Board**
-   - Switch to Tasks view in the activity bar
-   - Create cards with title and priority
+   - Switch to the Tasks view in the activity bar
+   - Click **+ Add card**, enter a title, pick a priority, then press Enter
    - Drag cards between columns (Plan → In Progress → Done)
 
 4. **Settings**
@@ -124,19 +137,20 @@ cargo run -- ./some/project
 ### Environment Variables
 
 ```bash
-# Disable Neovim integration (use native editor only)
+# Force pure native editing (skip the embedded Neovim backend)
 ARCTIS_NO_NVIM=1 cargo run -- ./my-project
-
-# Enable debug logging
-RUST_LOG=debug cargo run
-
-# Build release binary with optimizations
-cargo build --release
-./target/release/arctis-code -- ./my-project
 ```
 
-> **Tip:** For daily use, prefer `cargo run --release`: debug builds decode image
-> previews ~10× slower (seconds for multi-megapixel photos vs ~100ms).
+`ARCTIS_NO_NVIM` is the only environment variable the app reads. There is no
+logging framework wired in, so `RUST_LOG` has no effect.
+
+> **Tip:** For daily use, prefer `cargo run --release` (or the release
+> binary): debug builds decode image previews roughly 10× slower — seconds
+> for multi-megapixel photos versus about 100 ms.
+
+Requires `nvim` on `PATH` (falls back to native editing with a status warning
+if missing). The embedded backend runs stock (`--noplugin -u NONE`) and never
+blocks the UI.
 
 ## Multiple windows (multi-repo)
 
@@ -148,53 +162,55 @@ overwrite dialog. Closing a window with unsaved files offers
 Save-all / Discard-all. Note: dragging tree rows *between* windows is not
 supported — drop files from Finder, or open them in either window.
 
-Requires `nvim` on PATH (falls back to native editing with a status warning if missing).
-The embedded backend runs stock (`--noplugin -u NONE`) and never blocks the UI.
-Set `ARCTIS_NO_NVIM=1` to force pure native editing.
-
-> For daily use prefer `cargo run --release`: debug builds decode image
-> previews ~10× slower (seconds for multi-megapixel photos vs ~100ms).
-
 ## Dev hot reload (phase 0)
 
 ```sh
 cargo build
-./target/debug/arctis-host -- ./some/project
+./target/debug/arctis-host
 # edit code → cargo build → restart host (live swap without restart is phase 1)
 ```
 
-See `docs/HOTRELOAD.md`. Release `ArctisCode` stays statically linked.
+`arctis-host` loads `libarctis_code.{dylib,so,dll}` from its own directory and
+runs the app from it instead of statically linked code. It takes **no command
+line arguments** — open a project from inside the app. Phase 0 loads the
+library once at startup; live swap without restart is phase 1. See
+`docs/HOTRELOAD.md`. Release `ArctisCode` stays statically linked.
 
 ## Testing
 
 ```bash
-# Run all tests
+# Library unit tests
 cargo test --lib
 
-# Run tests for specific module
+# Unit tests for one module
 cargo test --lib tasks::
 
-# Run tests with logging
-RUST_LOG=debug cargo test --lib -- --nocapture
+# Integration tests (tests/ — entry, nvim, multiwindow, tokens, v1 DoD…)
+cargo test --test v1_dod
+cargo test --tests
 ```
 
 ## Contributing
 
-This repository uses branch protection on `main` and `test` branches:
+Branch protection is enabled on `main` and `test`:
 
-- All changes require a **Pull Request**
-- PRs must be **approved** before merging
-- Tests must pass before merge
-- Force push and deletions are disabled
+- All changes must go through a **Pull Request**
+- PRs require **1 approving review** before merge
+- Stale reviews are dismissed when new commits are pushed
+- Force pushes and branch deletions are blocked
+
+There is currently **no CI workflow** in this repository, so nothing is
+checked automatically: run `cargo test --lib` and `cargo build --release`
+locally before opening a PR.
 
 ### Workflow
 
-1. Create a feature branch from `dev`:
+1. Create a feature branch:
    ```bash
    git checkout -b feat/your-feature
    ```
 
-2. Make your changes and test:
+2. Make your changes and verify locally:
    ```bash
    cargo test --lib
    cargo build --release
@@ -206,8 +222,7 @@ This repository uses branch protection on `main` and `test` branches:
    git push origin feat/your-feature
    ```
 
-4. Open a Pull Request on GitHub
-5. Wait for approval and merge
+4. Open a Pull Request, then wait for review and merge.
 
 ## OpenCode skills
 
@@ -218,16 +233,13 @@ This repository uses branch protection on `main` and `test` branches:
 
 Track: startup, project-open, idle RSS, med-repo RSS, idle CPU, file-open latency. See `docs/PERF.md`.
 
-## macOS release bundle
+## macOS notes
 
-On macOS, run `scripts/build-macos.sh` to build `target/release/ArctisCode.app`.
-The script renders `public/icons/logo.svg` into the bundle icon and signs the
-bundle ad hoc for local use. Public distribution requires an Apple Developer ID
-signature and notarization; the script does not perform either step. The build
-matches the architecture of the machine running it. Neovim remains an optional
-external executable and must be available to the app on PATH.
+Building and signing the `.app` bundle is covered under
+[macOS App Bundle](#macos-app-bundle) above.
 
-The Dock menu lists up to ten recent project folders. Selecting one opens a new
+The Dock menu lists up to ten recent project folders; selecting one opens a new
 window. History is stored locally in the OS application data directory under
 `ArctisCode/recent-projects.json`; missing folders are reported without removing
-or replacing the current workspace.
+or replacing the current workspace. Neovim remains an optional external
+executable and must be available to the app on PATH.
