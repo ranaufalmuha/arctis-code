@@ -95,6 +95,14 @@ impl eframe::App for ArctisCodeApp {
                 first.status = format!("Project not found: {}", path.display());
             }
         }
+
+        // Keep at least one window alive so the app stays running in the
+        // background (macOS-style) even when all real windows are closed.
+        // The root window stays hidden with no project when all windows close.
+        if windows.is_empty() {
+            windows.push(RepoWindow::blank(egui::ViewportId::ROOT));
+        }
+
         let mut actions: Vec<WindowAction> = Vec::new();
 
         // Root viewport always shows the first window.
@@ -103,6 +111,7 @@ impl eframe::App for ArctisCodeApp {
         }
 
         // One immediate OS viewport per extra window.
+        // Each viewport handles its own close in its own context.
         let mut idx = 1;
         while idx < windows.len() {
             let title = windows[idx].title_text();
@@ -122,6 +131,20 @@ impl eframe::App for ArctisCodeApp {
                     .with_title_shown(false),
                 |vctx, _| windows[idx].render_window(vctx, theme, nvim, images, settings),
             );
+            // Process close actions from immediate viewports.
+            // For close actions from immediate viewports, we need to process
+            // them in the main loop but only remove from our window list.
+            // The viewport will close itself when it returns from show_viewport_immediate
+            // because that's how immediate viewports work - they exist only during the callback.
+            for action in &more {
+                match action {
+                    WindowAction::CloseWindow(vid) if *vid == id => {
+                        // This viewport closed itself - remove from our list
+                        // The OS viewport will disappear when show_viewport_immediate returns
+                    }
+                    _ => {}
+                }
+            }
             actions.extend(more);
             idx += 1;
         }
@@ -142,6 +165,8 @@ impl eframe::App for ArctisCodeApp {
         }
 
         // Apply shell-level requests.
+        // Only handle root viewport close here - non-root viewports handle
+        // their own closing in their render context.
         for action in actions {
             match action {
                 WindowAction::NewWindow => {
@@ -150,11 +175,15 @@ impl eframe::App for ArctisCodeApp {
                     windows.push(RepoWindow::blank(id));
                 }
                 WindowAction::CloseWindow(id) => {
+                    // Only handle root viewport closing in the main loop
+                    // Non-root viewports handle their own closing in show_viewport_immediate
                     if id == egui::ViewportId::ROOT {
-                        // Root viewport closing quits the app; the window
-                        // already passed its dirty guard to get here.
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        // For root, just remove it - we'll create a new blank one
+                        // This keeps the app running without showing anything
+                        windows.remove(0);
+                        // Don't send Close command - we want to keep the app running
                     } else {
+                        // For non-root, find and remove from our list
                         windows.retain(|w| w.viewport != id);
                     }
                 }

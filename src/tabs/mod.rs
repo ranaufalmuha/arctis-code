@@ -181,4 +181,45 @@ impl TabManager {
             }
         }
     }
+
+    /// Reload an open tab's content from disk when the file changed externally.
+    ///
+    /// - Not dirty: content + snapshot are refreshed from disk (auto-reload).
+    /// - Dirty: only the snapshot is refreshed so the guarded write stops
+    ///   rejecting the save; the user's unsaved edits are kept. Caller should
+    ///   surface a reload choice to the user.
+    pub fn reload_tab(&mut self, path: &Path) -> ReloadOutcome {
+        let Some(idx) = self.tabs.iter().position(|t| t.path == path) else {
+            return ReloadOutcome::NotFound;
+        };
+        let was_dirty = self.tabs[idx].dirty;
+        match Tab::open(path) {
+            Ok(reloaded) => {
+                if was_dirty {
+                    // Keep user's edits; only refresh the snapshot so
+                    // write_text_guarded no longer sees a mismatch.
+                    self.tabs[idx].snapshot = reloaded.snapshot;
+                    ReloadOutcome::DirtyKept
+                } else {
+                    self.tabs[idx] = reloaded;
+                    self.tabs[idx].dirty = false;
+                    ReloadOutcome::Reloaded
+                }
+            }
+            Err(_) => ReloadOutcome::Error,
+        }
+    }
+}
+
+/// Outcome of [`TabManager::reload_tab`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadOutcome {
+    /// Tab content and snapshot were refreshed from disk (tab was not dirty).
+    Reloaded,
+    /// Tab had unsaved edits; only the snapshot was refreshed, content kept.
+    DirtyKept,
+    /// No open tab matches the given path.
+    NotFound,
+    /// The file could not be re-read from disk.
+    Error,
 }

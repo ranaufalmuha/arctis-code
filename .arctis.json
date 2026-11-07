@@ -1,0 +1,37 @@
+{
+  "tasks": {
+    "columns": [
+      {
+        "id": "plan",
+        "title": "Plan"
+      },
+      {
+        "id": "progress",
+        "title": "In Progress"
+      },
+      {
+        "id": "done",
+        "title": "Done"
+      }
+    ],
+    "cards": [
+      {
+        "id": "c1",
+        "column": "plan",
+        "title": "github",
+        "desc": "",
+        "order": 0,
+        "urgency": "medium"
+      },
+      {
+        "id": "c2",
+        "column": "progress",
+        "title": "static files",
+        "desc": "",
+        "order": 0,
+        "urgency": "medium"
+      }
+    ],
+    "next_id": 3
+  }
+}

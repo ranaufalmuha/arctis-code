@@ -254,7 +254,29 @@ impl RepoWindow {
                 crate::project::watcher::FsEvent::Changed(p) => {
                     self.refresh_tree();
                     images.invalidate(&p);
-                    self.status = format!("Changed on disk: {}", p.display());
+                    match self.tabs.reload_tab(&p) {
+                        crate::tabs::ReloadOutcome::Reloaded => {
+                            // Not dirty → auto-reload, sync to nvim
+                            if let Some(tab) = self.tabs.active_ref() {
+                                if tab.path == p {
+                                    nvim.sync_buffer(&tab.path, &tab.content);
+                                }
+                            }
+                            self.status = format!("Reloaded from disk: {}", p.display());
+                        }
+                        crate::tabs::ReloadOutcome::DirtyKept => {
+                            // Dirty → snapshot refreshed, edits kept
+                            self.status = format!("Changed on disk (snapshot refreshed, edits kept): {}", p.display());
+                        }
+                        crate::tabs::ReloadOutcome::NotFound => {
+                            // No open tab, still notify
+                            self.status = format!("Changed on disk: {}", p.display());
+                        }
+                        crate::tabs::ReloadOutcome::Error => {
+                            // Read failed, fallback to old behavior
+                            self.status = format!("Changed on disk (could not read): {}", p.display());
+                        }
+                    }
                 }
                 crate::project::watcher::FsEvent::NeedsRefresh => self.refresh_tree(),
             }
@@ -336,10 +358,18 @@ impl RepoWindow {
                         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                         self.confirm_close_window = true;
                     } else {
+                        // Close this viewport's OS window (no-op for immediate
+                        // viewports that stop being rendered; required for root).
+                        if self.viewport != egui::ViewportId::ROOT {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
                         actions.push(WindowAction::CloseWindow(self.viewport));
                     }
                 }
             } else {
+                if self.viewport != egui::ViewportId::ROOT {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 actions.push(WindowAction::CloseWindow(self.viewport));
             }
         }
